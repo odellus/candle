@@ -1,0 +1,31 @@
+#version 450
+
+// Matrix multiplication for F32
+// C = A * B where A is MxK, B is KxN, C is MxN
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) buffer MatrixA { float a[]; };
+layout(set = 0, binding = 1) buffer MatrixB { float b[]; };
+layout(set = 0, binding = 2) buffer MatrixC { float c[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint M;
+    uint N;
+    uint K;
+    uint _padding;
+};
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+
+    if (row >= M || col >= N) return;
+
+    float sum = 0.0;
+    for (uint k = 0; k < K; k++) {
+        sum += a[row * K + k] * b[k * N + col];
+    }
+
+    c[row * N + col] = sum;
+}

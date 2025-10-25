@@ -1,0 +1,49 @@
+#version 450
+
+// Unary operations shader for Vulkan backend
+// Supports: Exp, Log, Sin, Cos, Sqrt, Abs, Neg, Sqr, Gelu, Relu, Tanh
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Input { float data_in[]; };
+layout(set = 0, binding = 1) buffer Output { float data_out[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint n_elements;
+    uint op_type;  // 0=exp, 1=log, 2=sin, 3=cos, 4=sqrt, 5=abs, 6=neg, 7=sqr, 8=gelu, 9=relu, 10=tanh
+    uint stride;
+    uint _padding;
+};
+
+const float GELU_CONST = 0.044715;
+const float SQRT_2_OVER_PI = 0.7978845608028654;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= n_elements) return;
+
+    float x = data_in[idx * stride];
+    float result;
+
+    switch (op_type) {
+        case 0: result = exp(x); break;
+        case 1: result = log(x); break;
+        case 2: result = sin(x); break;
+        case 3: result = cos(x); break;
+        case 4: result = sqrt(x); break;
+        case 5: result = abs(x); break;
+        case 6: result = -x; break;
+        case 7: result = x * x; break;
+        case 8: { // GELU
+            float cube = x * x * x;
+            float inner = SQRT_2_OVER_PI * (x + GELU_CONST * cube);
+            result = 0.5 * x * (1.0 + tanh(inner));
+            break;
+        }
+        case 9: result = max(0.0, x); break;  // ReLU
+        case 10: result = tanh(x); break;
+        default: result = 0.0; break;
+    }
+
+    data_out[idx] = result;
+}

@@ -1,0 +1,38 @@
+#version 450
+
+// Binary operations shader for Vulkan backend
+// Supports: Add, Sub, Mul, Div, Min, Max
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer InputA { float data_a[]; };
+layout(set = 0, binding = 1) buffer InputB { float data_b[]; };
+layout(set = 0, binding = 2) buffer Output { float data_out[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint n_elements;
+    uint op_type;  // 0=add, 1=sub, 2=mul, 3=div, 4=min, 5=max
+    uint stride_a;
+    uint stride_b;
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= n_elements) return;
+
+    float a = data_a[idx * stride_a];
+    float b = data_b[idx * stride_b];
+    float result;
+
+    switch (op_type) {
+        case 0: result = a + b; break;
+        case 1: result = a - b; break;
+        case 2: result = a * b; break;
+        case 3: result = a / b; break;
+        case 4: result = min(a, b); break;
+        case 5: result = max(a, b); break;
+        default: result = 0.0; break;
+    }
+
+    data_out[idx] = result;
+}

@@ -1,0 +1,17 @@
+[package]
+name = "candle-vulkan-kernels"
+version.workspace = true
+edition.workspace = true
+description = "Vulkan compute shaders for Candle ML framework"
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+ash = "0.38"
+gpu-allocator = { version = "0.27", features = ["vulkan"] }
+half = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+shaderc = "0.8"
+walkdir = "2.5"

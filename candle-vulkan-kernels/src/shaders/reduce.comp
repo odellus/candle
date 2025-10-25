@@ -1,0 +1,88 @@
+#version 450
+
+// Reduction operations shader for Vulkan backend
+// Supports: Sum, Min, Max, ArgMin, ArgMax
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) buffer Input { float data_in[]; };
+layout(set = 0, binding = 1) buffer Output { float data_out[]; };
+layout(set = 0, binding = 2) buffer OutputIndices { uint indices_out[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint n_elements;
+    uint reduce_dim_size;
+    uint op_type;  // 0=sum, 1=min, 2=max, 3=argmin, 4=argmax
+    uint output_size;
+};
+
+shared float shared_values[256];
+shared uint shared_indices[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint gid = gl_GlobalInvocationID.x;
+    uint output_idx = gl_WorkGroupID.x;
+
+    if (output_idx >= output_size) return;
+
+    // Initialize local value
+    float local_val;
+    uint local_idx = tid;
+
+    uint base_idx = output_idx * reduce_dim_size;
+
+    if (gid < n_elements && tid < reduce_dim_size) {
+        local_val = data_in[base_idx + tid];
+    } else {
+        if (op_type == 0) local_val = 0.0;        // sum
+        else if (op_type == 1) local_val = 1.0 / 0.0;  // min (inf)
+        else if (op_type == 2) local_val = -1.0 / 0.0; // max (-inf)
+        else local_val = 0.0;
+    }
+
+    shared_values[tid] = local_val;
+    shared_indices[tid] = local_idx;
+    barrier();
+
+    // Reduction in shared memory
+    for (uint s = 128; s > 0; s >>= 1) {
+        if (tid < s && (tid + s) < reduce_dim_size) {
+            float a = shared_values[tid];
+            float b = shared_values[tid + s];
+
+            if (op_type == 0) {  // sum
+                shared_values[tid] = a + b;
+            } else if (op_type == 1) {  // min
+                if (b < a) {
+                    shared_values[tid] = b;
+                    shared_indices[tid] = shared_indices[tid + s];
+                }
+            } else if (op_type == 2) {  // max
+                if (b > a) {
+                    shared_values[tid] = b;
+                    shared_indices[tid] = shared_indices[tid + s];
+                }
+            } else if (op_type == 3) {  // argmin
+                if (b < a) {
+                    shared_values[tid] = b;
+                    shared_indices[tid] = shared_indices[tid + s];
+                }
+            } else if (op_type == 4) {  // argmax
+                if (b > a) {
+                    shared_values[tid] = b;
+                    shared_indices[tid] = shared_indices[tid + s];
+                }
+            }
+        }
+        barrier();
+    }
+
+    // Write result
+    if (tid == 0) {
+        data_out[output_idx] = shared_values[0];
+        if (op_type >= 3) {  // argmin/argmax
+            indices_out[output_idx] = shared_indices[0];
+        }
+    }
+}
