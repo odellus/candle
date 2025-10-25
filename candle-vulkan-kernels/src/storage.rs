@@ -3,9 +3,9 @@
 //! This module provides buffer storage management following GGML patterns
 //! for efficient GPU memory allocation and data transfer.
 
-use crate::{error::VulkanError, error::Result, error::DType};
+use crate::{error::DType, error::Result, error::VulkanError};
 use ash::{vk, Device};
-use gpu_allocator::vulkan::{Allocation, AllocationScheme, MemoryLocation, VmaAllocationInfo};
+use gpu_allocator::vulkan::{Allocation, AllocationScheme, MemoryLocation};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ pub struct VulkanStorage {
 pub struct VulkanDevice {
     pub device: Arc<vk::Device>,
     pub allocator: Arc<Mutex<gpu_allocator::vulkan::Allocator>>,
-    pub context: super::VulkanContext,
+    pub context: Arc<super::VulkanContext>,
 }
 
 impl VulkanStorage {
@@ -48,13 +48,13 @@ impl VulkanStorage {
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
         let buffer = unsafe {
-            device.device.create_buffer(&buffer_info, None)
+            device
+                .device
+                .create_buffer(&buffer_info, None)
                 .map_err(|e| VulkanError::AshError(e))?
         };
 
-        let requirements = unsafe {
-            device.device.get_buffer_memory_requirements(buffer)
-        };
+        let requirements = unsafe { device.device.get_buffer_memory_requirements(buffer) };
 
         let allocation_desc = gpu_allocator::vulkan::AllocationCreateDesc {
             name: "Vulkan Buffer",
@@ -64,32 +64,36 @@ impl VulkanStorage {
             allocation_scheme: AllocationScheme::GpuAllocatorOwned,
         };
 
-        let allocation = device.allocator.lock().allocate(&allocation_desc)
+        let allocation = device
+            .allocator
+            .lock()
+            .allocate(&allocation_desc)
             .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?;
 
         unsafe {
-            device.device.bind_buffer_memory(
-                buffer,
-                allocation.memory(),
-                allocation.offset(),
-            ).map_err(|e| VulkanError::AshError(e))?;
+            device
+                .device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .map_err(|e| VulkanError::AshError(e))?;
         }
 
         let (host_buffer, host_allocation) = if memory_location == MemoryLocation::GpuOnly {
-            let host_usage = vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC;
+            let host_usage =
+                vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC;
             let host_buffer_info = vk::BufferCreateInfo::builder()
                 .size(buffer_size)
                 .usage(host_usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let host_buffer = unsafe {
-                device.device.create_buffer(&host_buffer_info, None)
+                device
+                    .device
+                    .create_buffer(&host_buffer_info, None)
                     .map_err(|e| VulkanError::AshError(e))?
             };
 
-            let host_requirements = unsafe {
-                device.device.get_buffer_memory_requirements(host_buffer)
-            };
+            let host_requirements =
+                unsafe { device.device.get_buffer_memory_requirements(host_buffer) };
 
             let host_allocation_desc = gpu_allocator::vulkan::AllocationCreateDesc {
                 name: "Vulkan Host Buffer",
@@ -99,18 +103,27 @@ impl VulkanStorage {
                 allocation_scheme: AllocationScheme::GpuAllocatorOwned,
             };
 
-            let host_allocation = device.allocator.lock().allocate(&host_allocation_desc)
+            let host_allocation = device
+                .allocator
+                .lock()
+                .allocate(&host_allocation_desc)
                 .map_err(|e| VulkanError::MemoryAllocation(e.to_string()))?;
 
             unsafe {
-                device.device.bind_buffer_memory(
-                    host_buffer,
-                    host_allocation.memory(),
-                    host_allocation.offset(),
-                ).map_err(|e| VulkanError::AshError(e))?;
+                device
+                    .device
+                    .bind_buffer_memory(
+                        host_buffer,
+                        host_allocation.memory(),
+                        host_allocation.offset(),
+                    )
+                    .map_err(|e| VulkanError::AshError(e))?;
             }
 
-            (Some(host_buffer), Some(Arc::new(Mutex::new(Some(host_allocation)))))
+            (
+                Some(host_buffer),
+                Some(Arc::new(Mutex::new(Some(host_allocation)))),
+            )
         } else {
             (None, None)
         };
@@ -143,20 +156,25 @@ impl VulkanStorage {
     }
 
     pub fn map_memory(&self) -> Result<*mut u8> {
-        let allocation = self.allocation.lock().as_ref().ok_or_else(|| {
-            VulkanError::BufferMapping("Buffer allocation not found".into())
-        })?;
+        let allocation = self
+            .allocation
+            .lock()
+            .as_ref()
+            .ok_or_else(|| VulkanError::BufferMapping("Buffer allocation not found".into()))?;
 
         unsafe {
-            allocation.map()
+            allocation
+                .map()
                 .map_err(|e| VulkanError::BufferMapping(e.to_string()))
         }
     }
 
     pub fn unmap_memory(&self) -> Result<()> {
-        let allocation = self.allocation.lock().as_ref().ok_or_else(|| {
-            VulkanError::BufferMapping("Buffer allocation not found".into())
-        })?;
+        let allocation = self
+            .allocation
+            .lock()
+            .as_ref()
+            .ok_or_else(|| VulkanError::BufferMapping("Buffer allocation not found".into()))?;
 
         unsafe {
             allocation.unmap();
@@ -193,15 +211,17 @@ impl VulkanStorage {
     }
 
     pub async fn copy_from_gpu_async(&self, command_buffer: vk::CommandBuffer) -> Result<()> {
-        if let (Some(host_buffer), Some(host_allocation)) = (&self.host_buffer, &self.host_allocation) {
+        if let (Some(host_buffer), Some(host_allocation)) =
+            (&self.host_buffer, &self.host_allocation)
+        {
             let src_buffer = self.buffer;
             let dst_buffer = *host_buffer;
 
-            let copy_region = vk::BufferCopy::builder()
-                .src_offset(0)
-                .dst_offset(0)
-                .size(self.count as u64 * self.dtype.size_in_bytes() as u64)
-                .build();
+            let copy_region = vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size: self.count as u64 * self.dtype.size_in_bytes() as u64,
+            };
 
             unsafe {
                 self.device.device.cmd_copy_buffer(
@@ -217,15 +237,17 @@ impl VulkanStorage {
     }
 
     pub async fn copy_to_gpu_async(&self, command_buffer: vk::CommandBuffer) -> Result<()> {
-        if let (Some(host_buffer), Some(host_allocation)) = (&self.host_buffer, &self.host_allocation) {
+        if let (Some(host_buffer), Some(host_allocation)) =
+            (&self.host_buffer, &self.host_allocation)
+        {
             let src_buffer = *host_buffer;
             let dst_buffer = self.buffer;
 
-            let copy_region = vk::BufferCopy::builder()
-                .src_offset(0)
-                .dst_offset(0)
-                .size(self.count as u64 * self.dtype.size_in_bytes() as u64)
-                .build();
+            let copy_region = vk::BufferCopy {
+                src_offset: 0,
+                dst_offset: 0,
+                size: self.count as u64 * self.dtype.size_in_bytes() as u64,
+            };
 
             unsafe {
                 self.device.device.cmd_copy_buffer(
@@ -245,16 +267,24 @@ impl Drop for VulkanStorage {
     fn drop(&mut self) {
         unsafe {
             if let Some(allocation) = self.allocation.lock().take() {
-                self.device.allocator.lock().free(allocation).unwrap_or_else(|e| {
-                    eprintln!("Failed to free allocation: {}", e);
-                });
+                self.device
+                    .allocator
+                    .lock()
+                    .free(allocation)
+                    .unwrap_or_else(|e| {
+                        eprintln!("Failed to free allocation: {}", e);
+                    });
             }
 
             if let Some(host_allocation) = &self.host_allocation {
                 if let Some(allocation) = host_allocation.lock().take() {
-                    self.device.allocator.lock().free(allocation).unwrap_or_else(|e| {
-                        eprintln!("Failed to free host allocation: {}", e);
-                    });
+                    self.device
+                        .allocator
+                        .lock()
+                        .free(allocation)
+                        .unwrap_or_else(|e| {
+                            eprintln!("Failed to free host allocation: {}", e);
+                        });
                 }
             }
 
@@ -292,11 +322,11 @@ impl std::fmt::Debug for VulkanStorage {
 }
 
 impl VulkanDevice {
-    pub fn new(context: super::VulkanContext) -> Self {
+    pub fn new(context: Arc<super::VulkanContext>) -> Self {
         Self {
-            device: Arc::new(context.device),
-            allocator: context.allocator.clone(),
-            context,
+            device: Arc::new(context.device.clone()),
+            allocator: Arc::clone(&context.allocator),
+            context: context.clone(),
         }
     }
 
