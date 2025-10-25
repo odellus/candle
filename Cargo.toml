@@ -9,6 +9,7 @@ members = [
     "candle-wasm-examples/*",
     "candle-wasm-tests",
     "tensor-tools",
+    "candle-vulkan-kernels",
 ]
 exclude = [
     "candle-book",
