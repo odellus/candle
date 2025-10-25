@@ -3,11 +3,11 @@
 //! This module provides Vulkan device initialization and management following
 //! the patterns established in GGML's Vulkan implementation.
 
-use crate::{error::DType, error::Result, error::VulkanError};
-use ash::{vk, Device, Entry, Instance};
-use gpu_allocator::vulkan::{Allocation, AllocationSizes, AllocatorCreateDesc};
+use crate::{error::Result, error::VulkanError};
+use ash::{vk, Entry, Instance};
+use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 use parking_lot::Mutex;
-use std::ffi::{c_char, CString};
+use std::ffi::CString;
 use std::sync::Arc;
 
 pub struct VulkanContext {
@@ -28,7 +28,7 @@ pub struct VulkanContext {
     pub device_info: DeviceInfo,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub name: String,
     pub subgroup_size: u32,
@@ -98,36 +98,37 @@ impl VulkanContext {
             .application_version(0)
             .engine_name(&engine_name)
             .engine_version(0)
-            .api_version(vk::API_VERSION_1_2);
+            .api_version(vk::API_VERSION_1_2)
+            .build();
 
-        let mut extension_names =
-            vec![ash::vk::KhrGetPhysicalDeviceProperties2Extension::name().as_ptr()];
-
-        let layer_names = vec![CString::new("VK_LAYER_KHRONOS_validation")?.as_ptr()];
+        let extension_names = vec![
+            ash::vk::KhrGetPhysicalDeviceProperties2Fn::name().as_ptr(),
+            ash::vk::KhrMaintenance1Fn::name().as_ptr(),
+            ash::vk::KhrShaderFloat16Int8Fn::name().as_ptr(),
+            ash::vk::Khr16bitStorageFn::name().as_ptr(),
+            ash::vk::KhrBufferDeviceAddressFn::name().as_ptr(),
+        ];
 
         let create_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&extension_names)
-            .enabled_layer_names(&layer_names);
+            .build();
 
-        let instance = unsafe {
-            entry
-                .create_instance(&create_info, None)
-                .map_err(|e| VulkanError::AshError(e))?
-        };
-
-        Ok(instance)
+        unsafe { Ok(entry.create_instance(&create_info, None)?) }
     }
 
     fn select_device(instance: &Instance, device_index: usize) -> Result<vk::PhysicalDevice> {
-        let physical_devices = unsafe { instance.enumerate_physical_devices() }
-            .map_err(|e| VulkanError::AshError(e))?;
-
-        if device_index >= physical_devices.len() {
-            return Err(VulkanError::InvalidDeviceIndex(device_index));
+        let physical_devices = unsafe { instance.enumerate_physical_devices()? };
+        if physical_devices.is_empty() {
+            return Err(VulkanError::NoVulkanDevices);
         }
 
-        Ok(physical_devices[device_index])
+        let physical_device = physical_devices
+            .get(device_index)
+            .copied()
+            .ok_or(VulkanError::InvalidDeviceIndex)?;
+
+        Ok(physical_device)
     }
 
     fn create_device(
@@ -139,37 +140,42 @@ impl VulkanContext {
 
         let compute_queue_family = queue_family_properties
             .iter()
-            .position(|qfp| qfp.queue_flags.contains(vk::QueueFlags::COMPUTE))
-            .ok_or(VulkanError::Message("No compute queue family found".into()))?
-            as u32;
+            .enumerate()
+            .find_map(|(i, props)| {
+                if props.queue_flags.contains(vk::QueueFlags::COMPUTE) {
+                    Some(i as u32)
+                } else {
+                    None
+                }
+            })
+            .ok_or(VulkanError::NoComputeQueueFamily)?;
 
         let queue_priorities = [1.0];
         let queue_create_info = vk::DeviceQueueCreateInfo::builder()
             .queue_family_index(compute_queue_family)
-            .queue_priorities(&queue_priorities);
+            .queue_priorities(&queue_priorities)
+            .build();
 
         let device_extensions = [
-            ash::vk::KhrMaintenance1Extension::name().as_ptr(),
-            ash::vk::KhrShaderFloat16Int8Extension::name().as_ptr(),
-            ash::vk::Khr16bitStorageExtension::name().as_ptr(),
+            ash::vk::KhrMaintenance1Fn::name().as_ptr(),
+            ash::vk::KhrShaderFloat16Int8Fn::name().as_ptr(),
+            ash::vk::Khr16bitStorageFn::name().as_ptr(),
+            ash::vk::KhrBufferDeviceAddressFn::name().as_ptr(),
         ];
 
         let features = vk::PhysicalDeviceFeatures::builder()
             .shader_float64(true)
             .shader_int64(true)
-            .shader_float16(true);
+            .shader_float16(true)
+            .build();
 
         let device_create_info = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&[queue_create_info])
             .enabled_extension_names(&device_extensions)
-            .enabled_features(&features);
+            .enabled_features(&features)
+            .build();
 
-        let device = unsafe {
-            instance
-                .create_device(physical_device, &device_create_info, None)
-                .map_err(|e| VulkanError::AshError(e))?
-        };
-
+        let device = unsafe { instance.create_device(physical_device, &device_create_info, None)? };
         let compute_queue = unsafe { device.get_device_queue(compute_queue_family, 0) };
 
         Ok((device, compute_queue, compute_queue_family))
@@ -178,13 +184,10 @@ impl VulkanContext {
     fn create_command_pool(device: &Device, queue_family: u32) -> Result<vk::CommandPool> {
         let command_pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-            .queue_family_index(queue_family);
+            .queue_family_index(queue_family)
+            .build();
 
-        unsafe {
-            device
-                .create_command_pool(&command_pool_info, None)
-                .map_err(|e| VulkanError::AshError(e))
-        }
+        unsafe { Ok(device.create_command_pool(&command_pool_info, None)?) }
     }
 
     fn create_descriptor_pool(device: &Device) -> Result<vk::DescriptorPool> {
@@ -195,20 +198,17 @@ impl VulkanContext {
                 .build(),
             vk::DescriptorPoolSize::builder()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(16)
+                .descriptor_count(32)
                 .build(),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::builder()
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .max_sets(256)
-            .pool_sizes(&pool_sizes);
+            .pool_sizes(&pool_sizes)
+            .build();
 
-        unsafe {
-            device
-                .create_descriptor_pool(&pool_info, None)
-                .map_err(|e| VulkanError::AshError(e))
-        }
+        unsafe { Ok(device.create_descriptor_pool(&pool_info, None)?) }
     }
 
     fn create_allocator(
@@ -220,12 +220,11 @@ impl VulkanContext {
             instance,
             device,
             physical_device,
-            device_name: "Vulkan Device",
-            preferred_device_type: gpu_allocator::MemoryLocation::GpuOnly,
-            allocation_sizes: gpu_allocator::AllocationSizes::new(),
+            debug_settings: Default::default(),
+            buffer_device_address: true,
         };
 
-        Allocator::new(create_desc)
+        Allocator::new(&create_desc)
     }
 
     fn query_device_info(
@@ -234,27 +233,26 @@ impl VulkanContext {
     ) -> Result<DeviceInfo> {
         let properties = unsafe { instance.get_physical_device_properties(physical_device) };
 
-        let queue_family_properties =
-            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-
-        let compute_queue_family = queue_family_properties
-            .iter()
-            .position(|qfp| qfp.queue_flags.contains(vk::QueueFlags::COMPUTE))
-            .ok_or(VulkanError::Message("No compute queue family found".into()))?
-            as u32;
-
-        let subgroup_properties =
-            unsafe { instance.get_physical_device_subgroup_properties(physical_device) };
-
-        let subgroup_size = if !subgroup_properties.is_empty() {
-            subgroup_properties[0].subgroup_size
-        } else {
-            32 // Default subgroup size
+        // Get subgroup size
+        let mut subgroup_size_properties = vk::PhysicalDeviceSubgroupProperties {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_SUBGROUP_PROPERTIES,
+            p_next: std::ptr::null_mut(),
+            subgroup_size: 0,
+            supported_operations: vk::SubgroupFeatureFlags::empty(),
+            ..Default::default()
         };
 
+        let mut properties2 = vk::PhysicalDeviceProperties2::builder()
+            .push_next(&mut subgroup_size_properties)
+            .build();
+
+        unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
+
         Ok(DeviceInfo {
-            name: properties.device_name.to_string_lossy().into_owned(),
-            subgroup_size,
+            name: std::ffi::CStr::from_ptr(properties.device_name.as_ptr())
+                .to_string_lossy()
+                .into_owned(),
+            subgroup_size: subgroup_size_properties.subgroup_size,
             max_workgroup_size: properties.limits.max_workgroup_size,
             vendor_id: properties.vendor_id,
             device_id: properties.device_id,
@@ -262,45 +260,12 @@ impl VulkanContext {
             api_version: properties.api_version,
         })
     }
-
-    pub fn create_shader_module(&self, shader_code: &[u32]) -> Result<vk::ShaderModule> {
-        let create_info = vk::ShaderModuleCreateInfo::builder().code(shader_code);
-
-        unsafe {
-            self.device
-                .create_shader_module(&create_info, None)
-                .map_err(|e| VulkanError::AshError(e))
-        }
-    }
-
-    pub fn create_compute_pipeline(
-        &self,
-        shader_module: vk::ShaderModule,
-        layout: vk::PipelineLayout,
-    ) -> Result<vk::Pipeline> {
-        let create_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(
-                vk::PipelineShaderStageCreateInfo::builder()
-                    .stage(vk::ShaderStageFlags::COMPUTE)
-                    .module(shader_module)
-                    .name("main")
-                    .build(),
-            )
-            .layout(layout);
-
-        let pipelines = unsafe {
-            self.device
-                .create_compute_pipelines(vk::PipelineCache::null(), &[create_info], None)
-        }
-        .map_err(|(_, e)| VulkanError::AshError(e))?;
-
-        Ok(pipelines[0])
-    }
 }
 
 impl Drop for VulkanContext {
     fn drop(&mut self) {
         unsafe {
+            self.device.device_wait_idle().ok();
             self.device.destroy_command_pool(self.compute_pool, None);
             self.device
                 .destroy_descriptor_pool(self.descriptor_pool, None);
@@ -310,12 +275,4 @@ impl Drop for VulkanContext {
     }
 }
 
-impl std::fmt::Debug for VulkanContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "VulkanContext {{ device: '{}', subgroup_size: {}, vendor_id: {} }}",
-            self.device_info.name, self.device_info.subgroup_size, self.device_info.vendor_id
-        )
-    }
-}
+pub type Device = ash::Device;

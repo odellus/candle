@@ -3,9 +3,11 @@
 //! This module provides buffer storage management following GGML patterns
 //! for efficient GPU memory allocation and data transfer.
 
+use crate::Device;
 use crate::{error::DType, error::Result, error::VulkanError};
-use ash::{vk, Device};
-use gpu_allocator::vulkan::{Allocation, AllocationScheme, MemoryLocation};
+use ash::vk;
+use gpu_allocator::vulkan::MemoryLocation;
+use gpu_allocator::vulkan::{Allocation, AllocationScheme};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -27,7 +29,7 @@ pub struct VulkanStorage {
 }
 
 pub struct VulkanDevice {
-    pub device: Arc<vk::Device>,
+    pub device: Arc<Device>,
     pub allocator: Arc<Mutex<gpu_allocator::vulkan::Allocator>>,
     pub context: Arc<super::VulkanContext>,
 }
@@ -224,12 +226,8 @@ impl VulkanStorage {
             };
 
             unsafe {
-                self.device.device.cmd_copy_buffer(
-                    command_buffer,
-                    src_buffer,
-                    dst_buffer,
-                    &[copy_region],
-                );
+                let device = &self.device.device;
+                device.cmd_copy_buffer(command_buffer, src_buffer, dst_buffer, &[copy_region]);
             }
         }
 
@@ -250,12 +248,8 @@ impl VulkanStorage {
             };
 
             unsafe {
-                self.device.device.cmd_copy_buffer(
-                    command_buffer,
-                    src_buffer,
-                    dst_buffer,
-                    &[copy_region],
-                );
+                let device = &self.device.device;
+                device.cmd_copy_buffer(command_buffer, self.buffer, dst_buffer, &[copy_region]);
             }
         }
 

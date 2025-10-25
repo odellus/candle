@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#define QK4_0 32
+
+// Must match Rust BlockQ4_0 layout exactly
+struct BlockQ4_0 {
+    float16_t d;
+    uint8_t qs[16];
+};
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer A { BlockQ4_0 data_a[]; };
+layout(binding = 1) readonly buffer B { float data_b[]; };
+layout(binding = 2) writeonly buffer D { float data_d[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint ncols_x;
+    uint nrows_x;
+    uint nrows_y;
+    uint nrows_dst;
+    uint row_stride_x;
+    uint channel_stride_x;
+} p;
+
+shared float tmp[32];
+
+void main() {
+    const uint row = gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationID.x;
+
+    const uint num_blocks_per_row = p.ncols_x / QK4_0;
+    float sum = 0.0;
+
+    // Process blocks assigned to this thread
+    for (uint i = tid; i < num_blocks_per_row; i += 32) {
+        const uint block_idx = row * num_blocks_per_row + i;
+        BlockQ4_0 block = data_a[block_idx];
+
+        float block_sum = 0.0;
+        for (uint j = 0; j < QK4_0; ++j) {
+            const uint b_idx = i * QK4_0 + j;
+            float b_val = data_b[b_idx];
+            float a_val = float(block.d) * float(((block.qs[j / 2] >> ((j & 1) * 4)) & 0x0F) - 8);
+            block_sum += a_val * b_val;
+        }
+        sum += block_sum;
+    }
+
+    // Reduction in shared memory (same as GGML)
+    tmp[tid] = sum;
+    barrier();
+
+    if (tid < 16) tmp[tid] += tmp[tid + 16];
+    barrier();
+    if (tid < 8) tmp[tid] += tmp[tid + 8];
+    barrier();
+    if (tid < 4) tmp[tid] += tmp[tid + 4];
+    barrier();
+    if (tid < 2) tmp[tid] += tmp[tid + 2];
+    barrier();
+    if (tid < 1) tmp[tid] += tmp[tid + 1];
+
+    if (tid == 0) {
+        data_d[row] = tmp[0];
+    }
+}

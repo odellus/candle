@@ -3,13 +3,12 @@
 //! This module provides quantization types that exactly match the GGML specification
 //! for compatibility with existing models and efficient GPU processing.
 
-use bytemuck::{Pod, Zeroable};
 use half::f16;
 
 /// Q4_0: 32 4-bit weights per block, 4.5 bits/weight
 /// Layout MUST match ggml-quants.h for GPU compatibility
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BlockQ4_0 {
     /// Scale factor (delta) for dequantization
     pub d: f16,
@@ -17,7 +16,7 @@ pub struct BlockQ4_0 {
     pub qs: [u8; 16],
 }
 
-// Compile-time layout validation (Rust safety!)
+// Compile-time layout validation
 const _: () = assert!(std::mem::size_of::<BlockQ4_0>() == 18);
 const _: () = assert!(std::mem::align_of::<BlockQ4_0>() == 2);
 
@@ -31,25 +30,25 @@ impl BlockQ4_0 {
         }
     }
 
-    /// Get weight at index (safe wrapper around bit manipulation)
-    pub fn get_weight(&self, idx: usize) -> i8 {
+    /// Get weight at index (safe wrapper around bit manipulation) - returns unsigned 0-15
+    pub fn get_weight(&self, idx: usize) -> u8 {
         assert!(idx < Self::WEIGHTS_PER_BLOCK);
         let byte_idx = idx / 2;
         let shift = (idx & 1) * 4;
-        let nibble = (self.qs[byte_idx] >> shift) & 0x0F;
-        (nibble as i8) - 8 // Convert to signed: -8 to 7
+        (self.qs[byte_idx] >> shift) & 0x0F
     }
 
     /// Dequantize single weight to f32
     pub fn dequantize(&self, idx: usize) -> f32 {
-        self.d.to_f32() * self.get_weight(idx) as f32
+        let w = self.get_weight(idx);
+        ((w as i8) - 8) as f32 * self.d.to_f32() // Convert to signed: -8 to 7, then scale
     }
 }
 
 /// Q4_1: 32 4-bit weights per block with additional min value, 4.75 bits/weight
 /// Layout MUST match ggml-quants.h for GPU compatibility
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable, Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BlockQ4_1 {
     /// Scale factor (delta) for dequantization
     pub d: f16,

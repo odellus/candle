@@ -1,0 +1,15 @@
+[package]
+name = "q4_0_demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+candle-vulkan-kernels = { path = "../../" }
+half = "2.3"
+rand = "0.8"
+
+[features]
+default = []
+vulkan = []
+
+[workspace]

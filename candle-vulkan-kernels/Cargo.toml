@@ -9,15 +9,16 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ash = "0.38"
-gpu-allocator = "0.27"
 bytemuck = { version = "1.14", features = ["derive"] }
 half = "2.3"
 thiserror = "1.0"
 parking_lot = "0.12"
 anyhow = "1.0"
 sha2 = "0.10"
-shaderc = "0.8"
+ash = { version = "0.38", optional = true }
+gpu-allocator = { version = "0.27", optional = true }
+shaderc = { version = "0.8", optional = true }
 
-[build-dependencies]
-shaderc = "0.8"
+[features]
+default = ["vulkan"]
+vulkan = ["ash", "gpu-allocator", "shaderc"]

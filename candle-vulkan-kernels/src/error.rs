@@ -45,6 +45,10 @@ pub enum VulkanError {
     NullError,
     #[error("Shader compiler not available")]
     CompilerNotAvailable,
+    #[error("No Vulkan devices found")]
+    NoVulkanDevices,
+    #[error("No compute queue family found")]
+    NoComputeQueueFamily,
 }
 
 impl From<std::ffi::NulError> for VulkanError {
@@ -53,8 +57,8 @@ impl From<std::ffi::NulError> for VulkanError {
     }
 }
 
-impl From<ash::EntryLoadingError> for VulkanError {
-    fn from(_: ash::EntryLoadingError) -> Self {
+impl From<ash::LoadingError> for VulkanError {
+    fn from(_: ash::LoadingError) -> Self {
         VulkanError::EntryLoadingFailed
     }
 }
