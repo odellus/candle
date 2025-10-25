@@ -1,12 +1,12 @@
 [package]
 name = "candle-vulkan-kernels"
-version.workspace = true
-edition.workspace = true
+version = "0.9.2-alpha.1"
+edition = "2021"
 description = "Vulkan kernels for Candle ML framework"
-repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
-license.workspace = true
+repository = "https://github.com/huggingface/candle"
+keywords = ["machine-learning", "gpu", "vulkan", "quantization"]
+categories = ["science"]
+license = "MIT"
 
 [dependencies]
 bytemuck = { version = "1.14", features = ["derive"] }
@@ -22,3 +22,8 @@ shaderc = { version = "0.8", optional = true }
 [features]
 default = ["vulkan"]
 vulkan = ["ash", "gpu-allocator", "shaderc"]
+
+[[example]]
+name = "q4_0_demo"
+path = "examples/q4_0_demo/src/main.rs"
+required-features = ["vulkan"]
