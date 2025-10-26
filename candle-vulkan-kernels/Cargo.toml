@@ -16,15 +16,23 @@ parking_lot = "0.12"
 anyhow = "1.0"
 sha2 = "0.10"
 rand = "0.8"
-ash = { version = "0.38", optional = true }
-gpu-allocator = { version = "0.27", optional = true }
-shaderc = { version = "0.8", optional = true }
+ash = { version = "0.38" }
+gpu-allocator = { version = "0.27" }
+shaderc = { version = "0.8" }
+
+[build-dependencies]
+shaderc = "0.8"
 
 [features]
 default = ["vulkan"]
-vulkan = ["ash", "gpu-allocator", "shaderc"]
+vulkan = []
 
 [[example]]
 name = "q4_0_demo"
 path = "examples/q4_0_demo/src/main.rs"
+required-features = ["vulkan"]
+
+[[example]]
+name = "vulkan_matmul_demo"
+path = "examples/vulkan_matmul_demo/src/main.rs"
 required-features = ["vulkan"]

@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_q4_0_layout_compatibility() {
         // Test that our BlockQ4_0 matches GGML layout expectations
-        let q4_0 = BlockQ4_0::zeroed();
+        let _q4_0 = BlockQ4_0::zeroed();
         assert_eq!(std::mem::size_of::<BlockQ4_0>(), 18);
         assert_eq!(std::mem::align_of::<BlockQ4_0>(), 2);
         assert_eq!(BlockQ4_0::WEIGHTS_PER_BLOCK, 32);
