@@ -1,0 +1,79 @@
+#version 450
+
+// Matrix Multiplication: C = A * B
+//
+// A is [M x K], B is [K x N], C is [M x N]
+// All matrices are row-major
+// Uses tiled approach with shared memory for better cache utilization
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+    uint M;  // Rows of A and C
+    uint N;  // Cols of B and C
+    uint K;  // Cols of A, Rows of B
+} params;
+
+layout(set = 0, binding = 0) readonly buffer MatrixA {
+    float A[];
+};
+
+layout(set = 0, binding = 1) readonly buffer MatrixB {
+    float B[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer MatrixC {
+    float C[];
+};
+
+// Tile size matches workgroup size
+const uint TILE_SIZE = 16;
+
+shared float tileA[TILE_SIZE][TILE_SIZE];
+shared float tileB[TILE_SIZE][TILE_SIZE];
+
+void main() {
+    uint row = gl_GlobalInvocationID.y;
+    uint col = gl_GlobalInvocationID.x;
+    uint localRow = gl_LocalInvocationID.y;
+    uint localCol = gl_LocalInvocationID.x;
+
+    float sum = 0.0;
+
+    // Number of tiles needed to cover K dimension
+    uint numTiles = (params.K + TILE_SIZE - 1) / TILE_SIZE;
+
+    for (uint t = 0; t < numTiles; t++) {
+        // Load tile of A into shared memory
+        uint aRow = row;
+        uint aCol = t * TILE_SIZE + localCol;
+        if (aRow < params.M && aCol < params.K) {
+            tileA[localRow][localCol] = A[aRow * params.K + aCol];
+        } else {
+            tileA[localRow][localCol] = 0.0;
+        }
+
+        // Load tile of B into shared memory
+        uint bRow = t * TILE_SIZE + localRow;
+        uint bCol = col;
+        if (bRow < params.K && bCol < params.N) {
+            tileB[localRow][localCol] = B[bRow * params.N + bCol];
+        } else {
+            tileB[localRow][localCol] = 0.0;
+        }
+
+        barrier();
+
+        // Compute partial dot product for this tile
+        for (uint k = 0; k < TILE_SIZE; k++) {
+            sum += tileA[localRow][k] * tileB[k][localCol];
+        }
+
+        barrier();
+    }
+
+    // Write result
+    if (row < params.M && col < params.N) {
+        C[row * params.N + col] = sum;
+    }
+}

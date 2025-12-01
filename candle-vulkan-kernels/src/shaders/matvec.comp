@@ -1,0 +1,61 @@
+#version 450
+
+// Matrix-Vector Multiplication: output = matrix * vector
+//
+// Matrix is row-major: matrix[row * ncols + col]
+// Each workgroup computes one output element (one row's dot product)
+// Threads within workgroup cooperatively compute partial sums then reduce
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform PushConstants {
+    uint nrows;  // Number of rows (output size)
+    uint ncols;  // Number of columns (input vector size)
+} params;
+
+layout(set = 0, binding = 0) readonly buffer MatrixBuffer {
+    float matrix[];
+};
+
+layout(set = 0, binding = 1) readonly buffer VectorBuffer {
+    float vec_in[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer OutputBuffer {
+    float vec_out[];
+};
+
+shared float partial_sums[256];
+
+void main() {
+    uint row = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    if (row >= params.nrows) {
+        return;
+    }
+
+    // Each thread computes partial sum for strided columns
+    float sum = 0.0;
+    uint row_offset = row * params.ncols;
+
+    for (uint col = tid; col < params.ncols; col += 256) {
+        sum += matrix[row_offset + col] * vec_in[col];
+    }
+
+    partial_sums[tid] = sum;
+    barrier();
+
+    // Tree reduction
+    for (uint stride = 128; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            partial_sums[tid] += partial_sums[tid + stride];
+        }
+        barrier();
+    }
+
+    // Thread 0 writes result
+    if (tid == 0) {
+        vec_out[row] = partial_sums[0];
+    }
+}

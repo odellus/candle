@@ -19,6 +19,9 @@ impl Tensor {
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{gpu_id}")
             }
+            crate::DeviceLocation::Vulkan { gpu_id } => {
+                format!(", vulkan:{gpu_id}")
+            }
         };
 
         write!(f, "Tensor[")?;
@@ -516,6 +519,9 @@ impl std::fmt::Display for Tensor {
             }
             crate::DeviceLocation::Metal { gpu_id } => {
                 format!(", metal:{gpu_id}")
+            }
+            crate::DeviceLocation::Vulkan { gpu_id } => {
+                format!(", vulkan:{gpu_id}")
             }
         };
 

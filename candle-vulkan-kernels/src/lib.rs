@@ -1,14 +1,35 @@
-//! Vulkan kernels for Candle ML framework
+//! Vulkan compute kernels for Candle
 //!
-//! This crate provides Vulkan backend implementation for Candle following the same
-//! architecture as the Metal backend.
+//! This crate provides Vulkan backend compute kernels following the same
+//! patterns as candle-metal-kernels.
 
-pub mod device;
-pub mod kernels;
-pub mod quant_types;
-pub mod storage;
+mod context;
+mod error;
+mod kernels;
+pub mod ops;
 
-pub use device::VulkanContext;
+pub use context::VulkanContext;
+pub use error::{VulkanError, Result};
 pub use kernels::Kernels;
-pub use quant_types::{BlockQ4_0, GgmlDType};
-pub use storage::VulkanStorage;
+
+/// Data types supported by kernels
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DType {
+    F32,
+    F16,
+    BF16,
+    U8,
+    U32,
+    I64,
+}
+
+impl DType {
+    pub fn size_in_bytes(&self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::BF16 | Self::F16 => 2,
+            Self::U32 | Self::F32 => 4,
+            Self::I64 => 8,
+        }
+    }
+}

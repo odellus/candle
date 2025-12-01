@@ -14,9 +14,12 @@ accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+candle-vulkan-kernels = { path = "../candle-vulkan-kernels", optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
+ash = { version = "0.38", optional = true }
+vk-mem = { version = "0.4", optional = true }
 gemm = { workspace = true }
 half = { workspace = true }
 float8 = { workspace = true }
@@ -54,6 +57,11 @@ metal = [
     "dep:objc2-foundation",
     "dep:candle-metal-kernels",
     "dep:ug-metal",
+]
+vulkan = [
+    "dep:ash",
+    "dep:vk-mem",
+    "dep:candle-vulkan-kernels",
 ]
 
 [[bench]]
