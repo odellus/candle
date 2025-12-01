@@ -16,23 +16,32 @@ pub mod source {
     pub const MATVEC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/matvec.spv"));
 
     // GGML-derived shaders (MIT licensed from llama.cpp)
-    // Unary ops
+
+    // Unary ops - contiguous (fast path, simple push constants)
     pub const EXP_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/exp_f32.spv"));
     pub const SILU_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/silu_f32.spv"));
     pub const GELU_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/gelu_f32.spv"));
     pub const RELU_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/relu_f32.spv"));
+
+    // Unary ops - strided (full stride support via generic_unary_head.glsl)
+    pub const EXP_F32_STRIDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/exp_f32_strided.spv"));
+    pub const SILU_F32_STRIDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/silu_f32_strided.spv"));
+    pub const GELU_F32_STRIDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/gelu_f32_strided.spv"));
+    pub const RELU_F32_STRIDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/relu_f32_strided.spv"));
+
+    // Other strided unary ops
     pub const SQRT_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/sqrt_f32.spv"));
     pub const SIN_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/sin_f32.spv"));
     pub const COS_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/cos_f32.spv"));
     pub const CLAMP_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/clamp_f32.spv"));
     pub const SCALE_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/scale_f32.spv"));
 
-    // Binary ops
+    // Binary ops (strided with broadcast support via generic_binary_head.glsl)
     pub const ADD_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/add_f32.spv"));
     pub const MUL_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mul_f32.spv"));
     pub const DIV_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/div_f32.spv"));
 
-    // Copy
+    // Copy (strided)
     pub const COPY_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/copy_f32.spv"));
 }
 

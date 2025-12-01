@@ -295,3 +295,235 @@ fn test_vulkan_chained_ops() -> Result<()> {
     println!("Chained ops test passed!");
     Ok(())
 }
+
+// ============ Strided tensor tests ============
+
+#[test]
+fn test_vulkan_strided_unary_transpose() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Create a 2D tensor and transpose it (creates non-contiguous view)
+    let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = Tensor::from_vec(data, (2, 3), &Device::Cpu)?.to_device(&device)?;
+
+    // Transpose creates a strided tensor
+    let transposed = tensor.t()?;
+
+    // Apply exp to the strided tensor
+    let result = transposed.exp()?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    // Expected: exp of transposed values
+    // Original: [[1,2,3], [4,5,6]]
+    // Transposed: [[1,4], [2,5], [3,6]]
+    let expected = vec![
+        vec![1.0_f32.exp(), 4.0_f32.exp()],
+        vec![2.0_f32.exp(), 5.0_f32.exp()],
+        vec![3.0_f32.exp(), 6.0_f32.exp()],
+    ];
+
+    for (i, (got_row, exp_row)) in result_vec.iter().zip(expected.iter()).enumerate() {
+        for (j, (got, exp)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+            // Use relative tolerance for larger values (exp can produce large numbers)
+            let tol = 1e-5 * exp.abs().max(1.0);
+            assert!(
+                (got - exp).abs() < tol,
+                "strided exp mismatch at [{},{}]: got {}, expected {}, diff {}",
+                i,
+                j,
+                got,
+                exp,
+                (got - exp).abs()
+            );
+        }
+    }
+    println!("Strided unary (transpose) test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_strided_unary_narrow() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Create a tensor and narrow it (creates non-contiguous view)
+    let data: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let tensor = Tensor::from_vec(data, (4, 6), &Device::Cpu)?.to_device(&device)?;
+
+    // Narrow on dimension 1: take columns 1-3 (creates strided view)
+    let narrowed = tensor.narrow(1, 1, 3)?;
+
+    // Apply relu to the strided tensor
+    let result = narrowed.relu()?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    // Expected values
+    let expected = vec![
+        vec![1.0, 2.0, 3.0],
+        vec![7.0, 8.0, 9.0],
+        vec![13.0, 14.0, 15.0],
+        vec![19.0, 20.0, 21.0],
+    ];
+
+    assert_eq!(result_vec, expected);
+    println!("Strided unary (narrow) test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_strided_silu() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Test SiLU on a transposed tensor
+    let data: Vec<f32> = vec![-2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
+    let tensor = Tensor::from_vec(data.clone(), (2, 3), &Device::Cpu)?.to_device(&device)?;
+    let transposed = tensor.t()?;
+
+    let result = transposed.silu()?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    // Compute expected on CPU with same transposition
+    let cpu_tensor = Tensor::from_vec(data, (2, 3), &Device::Cpu)?;
+    let cpu_transposed = cpu_tensor.t()?;
+    let cpu_result = cpu_transposed.silu()?;
+    let expected = cpu_result.to_vec2::<f32>()?;
+
+    for (i, (got_row, exp_row)) in result_vec.iter().zip(expected.iter()).enumerate() {
+        for (j, (got, exp)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-5,
+                "strided silu mismatch at [{},{}]: got {}, expected {}",
+                i,
+                j,
+                got,
+                exp
+            );
+        }
+    }
+    println!("Strided SiLU test passed!");
+    Ok(())
+}
+
+// ============ Broadcasting tests ============
+
+#[test]
+fn test_vulkan_broadcast_add_scalar() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Add a scalar (1D tensor with 1 element) to a larger tensor
+    let a_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+    let b_data: Vec<f32> = vec![10.0];
+
+    let a = Tensor::from_vec(a_data.clone(), (4,), &Device::Cpu)?.to_device(&device)?;
+    let b = Tensor::from_vec(b_data.clone(), (1,), &Device::Cpu)?.to_device(&device)?;
+
+    let result = a.broadcast_add(&b)?;
+    let result_vec = result.to_vec1::<f32>()?;
+
+    let expected: Vec<f32> = a_data.iter().map(|x| x + 10.0).collect();
+    assert_eq!(result_vec, expected);
+    println!("Broadcast add (scalar) test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_broadcast_add_row() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Add a row vector to a matrix (broadcasting along rows)
+    let a = Tensor::from_vec(
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0],
+        (2, 3),
+        &Device::Cpu,
+    )?
+    .to_device(&device)?;
+
+    let b = Tensor::from_vec(vec![10.0f32, 20.0, 30.0], (1, 3), &Device::Cpu)?.to_device(&device)?;
+
+    let result = a.broadcast_add(&b)?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    let expected = vec![vec![11.0, 22.0, 33.0], vec![14.0, 25.0, 36.0]];
+    assert_eq!(result_vec, expected);
+    println!("Broadcast add (row) test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_broadcast_mul_column() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Multiply a column vector with a matrix (broadcasting along columns)
+    let a = Tensor::from_vec(
+        vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0],
+        (2, 3),
+        &Device::Cpu,
+    )?
+    .to_device(&device)?;
+
+    let b = Tensor::from_vec(vec![10.0f32, 100.0], (2, 1), &Device::Cpu)?.to_device(&device)?;
+
+    let result = a.broadcast_mul(&b)?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    let expected = vec![vec![10.0, 20.0, 30.0], vec![400.0, 500.0, 600.0]];
+    assert_eq!(result_vec, expected);
+    println!("Broadcast mul (column) test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_broadcast_3d() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // 3D broadcasting: (2, 3, 4) + (1, 3, 1) -> (2, 3, 4)
+    let a_data: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let b_data: Vec<f32> = vec![100.0f32, 200.0, 300.0];
+
+    let a = Tensor::from_vec(a_data, (2, 3, 4), &Device::Cpu)?.to_device(&device)?;
+    let b = Tensor::from_vec(b_data, (1, 3, 1), &Device::Cpu)?.to_device(&device)?;
+
+    let result = a.broadcast_add(&b)?;
+    let result_vec = result.to_vec3::<f32>()?;
+
+    // Verify a few values
+    // a[0,0,0] = 0, b broadcasted = 100 -> 100
+    assert_eq!(result_vec[0][0][0], 100.0);
+    // a[0,1,0] = 4, b broadcasted = 200 -> 204
+    assert_eq!(result_vec[0][1][0], 204.0);
+    // a[0,2,0] = 8, b broadcasted = 300 -> 308
+    assert_eq!(result_vec[0][2][0], 308.0);
+    // a[1,0,0] = 12, b broadcasted = 100 -> 112
+    assert_eq!(result_vec[1][0][0], 112.0);
+
+    println!("Broadcast 3D test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_strided_binary() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Test binary op with both operands strided (transposed)
+    let a_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let b_data: Vec<f32> = vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0];
+
+    let a = Tensor::from_vec(a_data.clone(), (2, 3), &Device::Cpu)?.to_device(&device)?;
+    let b = Tensor::from_vec(b_data.clone(), (2, 3), &Device::Cpu)?.to_device(&device)?;
+
+    // Transpose both
+    let a_t = a.t()?;
+    let b_t = b.t()?;
+
+    let result = (&a_t + &b_t)?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    // CPU reference
+    let cpu_a = Tensor::from_vec(a_data, (2, 3), &Device::Cpu)?;
+    let cpu_b = Tensor::from_vec(b_data, (2, 3), &Device::Cpu)?;
+    let cpu_result = (cpu_a.t()? + cpu_b.t()?)?;
+    let expected = cpu_result.to_vec2::<f32>()?;
+
+    assert_eq!(result_vec, expected);
+    println!("Strided binary test passed!");
+    Ok(())
+}

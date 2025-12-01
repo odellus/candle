@@ -1,0 +1,20 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_unary_head.glsl"
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+#define GELU_COEF_A 0.044715f
+#define SQRT_2_OVER_PI 0.79788456080286535587989211986876f
+
+void main() {
+    const uint idx = get_idx();
+
+    if (idx >= p.ne) {
+        return;
+    }
+
+    const FLOAT_TYPE val = FLOAT_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(0.5f * val * (1.0f + tanh(SQRT_2_OVER_PI * val * (1.0f + GELU_COEF_A * val * val))));
+}

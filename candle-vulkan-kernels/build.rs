@@ -58,19 +58,26 @@ fn main() {
     // Define shader variants to compile
     // Each variant has a name, source file, and preprocessor defines
     let variants: Vec<ShaderVariant> = vec![
-        // Unary ops - f32
+        // Unary ops - f32 contiguous (use generic_head.glsl - simple KX/KY params)
         ShaderVariant { name: "exp_f32", source: "exp.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
         ShaderVariant { name: "silu_f32", source: "silu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
         ShaderVariant { name: "gelu_f32", source: "gelu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
         ShaderVariant { name: "relu_f32", source: "relu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
-        // Unary ops using generic_unary_head.glsl - need FLOAT_TYPE too
+
+        // Unary ops - f32 strided (use generic_unary_head.glsl - full stride support)
+        ShaderVariant { name: "exp_f32_strided", source: "exp_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
+        ShaderVariant { name: "silu_f32_strided", source: "silu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
+        ShaderVariant { name: "gelu_f32_strided", source: "gelu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
+        ShaderVariant { name: "relu_f32_strided", source: "relu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
+
+        // Other strided unary ops (already use generic_unary_head.glsl)
         ShaderVariant { name: "sqrt_f32", source: "sqrt.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
         ShaderVariant { name: "sin_f32", source: "sin.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
         ShaderVariant { name: "cos_f32", source: "cos.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
         ShaderVariant { name: "clamp_f32", source: "clamp.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
         ShaderVariant { name: "scale_f32", source: "scale.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
 
-        // Binary ops - f32
+        // Binary ops - f32 (already use generic_binary_head.glsl with full stride/broadcast support)
         ShaderVariant { name: "add_f32", source: "add.comp", defines: &[
             ("A_TYPE", "float"), ("B_TYPE", "float"), ("D_TYPE", "float"),
             ("FLOAT_TYPE", "float"), ("QUANT_K", "1"), ("QUANT_R", "1"),
@@ -84,15 +91,10 @@ fn main() {
             ("FLOAT_TYPE", "float"), ("QUANT_K", "1"), ("QUANT_R", "1"),
         ]},
 
-        // Copy
+        // Copy (strided)
         ShaderVariant { name: "copy_f32", source: "copy.comp", defines: &[
             ("A_TYPE", "float"), ("D_TYPE", "float"),
         ]},
-
-        // RMS norm - needs more defines, skip for now
-        // ShaderVariant { name: "rms_norm_f32", source: "rms_norm.comp", defines: &[
-        //     ("A_TYPE", "float"), ("B_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float"),
-        // ]},
     ];
 
     for variant in &variants {

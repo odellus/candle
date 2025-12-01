@@ -9,17 +9,92 @@ use ash::vk;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BinaryParams {
-    pub ne: u32,           // total number of elements
+    pub ne: u32,           // total number of elements in output
+    // Source 0 (lhs) shape and strides (in elements, not bytes)
     pub ne00: u32, pub ne01: u32, pub ne02: u32, pub ne03: u32,
     pub nb00: u32, pub nb01: u32, pub nb02: u32, pub nb03: u32,
+    // Source 1 (rhs) shape and strides
     pub ne10: u32, pub ne11: u32, pub ne12: u32, pub ne13: u32,
     pub nb10: u32, pub nb11: u32, pub nb12: u32, pub nb13: u32,
+    // Destination shape and strides
     pub ne20: u32, pub ne21: u32, pub ne22: u32, pub ne23: u32,
     pub nb20: u32, pub nb21: u32, pub nb22: u32, pub nb23: u32,
     pub misalign_offsets: u32,
     pub param1: f32,
     pub param2: f32,
     pub param3: i32,
+}
+
+/// Shape and stride info for a tensor (up to 4D)
+#[derive(Debug, Clone, Copy)]
+pub struct TensorLayout {
+    /// Shape dimensions (ne0 is innermost/fastest)
+    pub shape: [u32; 4],
+    /// Strides in elements (nb0 is innermost)
+    pub strides: [u32; 4],
+    /// Element offset into the buffer
+    pub offset: u32,
+}
+
+impl TensorLayout {
+    /// Create layout for a contiguous 1D tensor
+    pub fn contiguous_1d(n: u32) -> Self {
+        Self {
+            shape: [n, 1, 1, 1],
+            strides: [1, n, n, n],
+            offset: 0,
+        }
+    }
+
+    /// Create layout from shape, strides, and offset (candle uses row-major, outermost first)
+    /// shape: [dim0, dim1, ...] where dim0 is outermost
+    /// strides: [stride0, stride1, ...] where stride0 is outermost
+    /// offset: element offset into the buffer (from layout.start_offset())
+    pub fn from_shape_strides_offset(shape: &[usize], strides: &[usize], offset: usize) -> Self {
+        let mut s = [1u32; 4];
+        let mut st = [0u32; 4];
+
+        let ndim = shape.len().min(4);
+
+        // Map from candle's [outermost..innermost] to ggml's [innermost..outermost]
+        // candle: shape[0] is outermost, strides[0] is outermost
+        // ggml: ne00 is innermost, ne03 is outermost
+        for i in 0..ndim {
+            let ggml_idx = ndim - 1 - i; // reverse order
+            s[ggml_idx] = shape[i] as u32;
+            st[ggml_idx] = strides[i] as u32;
+        }
+
+        // Fill remaining dimensions
+        for i in ndim..4 {
+            s[i] = 1;
+            st[i] = st[i.saturating_sub(1)];
+        }
+
+        Self { shape: s, strides: st, offset: offset as u32 }
+    }
+
+    /// Create layout from shape and strides (no offset)
+    pub fn from_shape_strides(shape: &[usize], strides: &[usize]) -> Self {
+        Self::from_shape_strides_offset(shape, strides, 0)
+    }
+
+    /// Check if this layout is contiguous
+    pub fn is_contiguous(&self) -> bool {
+        let mut expected_stride = 1u32;
+        for i in 0..4 {
+            if self.strides[i] != expected_stride && self.shape[i] > 1 {
+                return false;
+            }
+            expected_stride *= self.shape[i];
+        }
+        true
+    }
+
+    /// Total number of elements
+    pub fn num_elements(&self) -> u32 {
+        self.shape.iter().product()
+    }
 }
 
 impl BinaryParams {
@@ -40,6 +115,36 @@ impl BinaryParams {
             param3: 0,
         }
     }
+
+    /// Create params from tensor layouts with broadcasting support
+    pub fn from_layouts(lhs: &TensorLayout, rhs: &TensorLayout, out: &TensorLayout) -> Self {
+        // Pack offsets into misalign_offsets:
+        // In generic_binary_head.glsl:
+        //   get_aoffset() = misalign_offsets >> 16       (bits 16-31, but really only 8 bits used)
+        //   get_boffset() = (misalign_offsets >> 8) & 0xFF (bits 8-15)
+        //   get_doffset() = misalign_offsets & 0xFF      (bits 0-7)
+        // Note: ggml uses 8-bit offsets for binary ops (max 255)
+        let misalign_offsets = ((lhs.offset & 0xFF) << 16)
+                             | ((rhs.offset & 0xFF) << 8)
+                             | (out.offset & 0xFF);
+
+        Self {
+            ne: out.num_elements(),
+            // lhs (src0)
+            ne00: lhs.shape[0], ne01: lhs.shape[1], ne02: lhs.shape[2], ne03: lhs.shape[3],
+            nb00: lhs.strides[0], nb01: lhs.strides[1], nb02: lhs.strides[2], nb03: lhs.strides[3],
+            // rhs (src1)
+            ne10: rhs.shape[0], ne11: rhs.shape[1], ne12: rhs.shape[2], ne13: rhs.shape[3],
+            nb10: rhs.strides[0], nb11: rhs.strides[1], nb12: rhs.strides[2], nb13: rhs.strides[3],
+            // output (dst)
+            ne20: out.shape[0], ne21: out.shape[1], ne22: out.shape[2], ne23: out.shape[3],
+            nb20: out.strides[0], nb21: out.strides[1], nb22: out.strides[2], nb23: out.strides[3],
+            misalign_offsets,
+            param1: 0.0,
+            param2: 0.0,
+            param3: 0,
+        }
+    }
 }
 
 /// Binary operation types
@@ -50,12 +155,12 @@ pub enum BinaryOp {
     Div,
 }
 
-/// Execute a binary operation: output = a op b
-pub fn call_binary(
+/// Execute a binary operation with full layout support: output = a op b
+pub fn call_binary_strided(
     kernels: &Kernels,
     command_buffer: vk::CommandBuffer,
     op: BinaryOp,
-    num_elements: usize,
+    params: &BinaryParams,
     input_a: vk::Buffer,
     input_b: vk::Buffer,
     output: vk::Buffer,
@@ -111,8 +216,7 @@ pub fn call_binary(
         device.update_descriptor_sets(&writes, &[]);
     }
 
-    // Record commands
-    let params = BinaryParams::contiguous(num_elements);
+    let num_elements = params.ne as usize;
 
     // Calculate dispatch size
     // The shader uses: gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x
@@ -146,13 +250,27 @@ pub fn call_binary(
             cached.layout,
             vk::ShaderStageFlags::COMPUTE,
             0,
-            bytemuck::bytes_of(&params),
+            bytemuck::bytes_of(params),
         );
 
         device.cmd_dispatch(command_buffer, wx, wy, wz);
     }
 
     Ok(())
+}
+
+/// Execute a binary operation: output = a op b (simple contiguous version)
+pub fn call_binary(
+    kernels: &Kernels,
+    command_buffer: vk::CommandBuffer,
+    op: BinaryOp,
+    num_elements: usize,
+    input_a: vk::Buffer,
+    input_b: vk::Buffer,
+    output: vk::Buffer,
+) -> Result<()> {
+    let params = BinaryParams::contiguous(num_elements);
+    call_binary_strided(kernels, command_buffer, op, &params, input_a, input_b, output)
 }
 
 /// Execute add: output = a + b

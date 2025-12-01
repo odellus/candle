@@ -114,141 +114,194 @@ impl VulkanStorage {
         Ok(slice.to_vec())
     }
 
-    /// Execute a unary kernel operation
-    fn run_unary_kernel<F>(&self, layout: &Layout, kernel_fn: F) -> Result<Self>
-    where
-        F: FnOnce(
-            &candle_vulkan_kernels::Kernels,
-            vk::CommandBuffer,
-            usize,
-            vk::Buffer,
-            vk::Buffer,
-        ) -> candle_vulkan_kernels::Result<()>,
-    {
-        // Only support contiguous tensors for now
-        if !layout.is_contiguous() {
-            crate::bail!("Vulkan unary ops only support contiguous tensors");
-        }
+    /// Execute a unary kernel operation with full stride support
+    fn run_unary_kernel_strided(
+        &self,
+        layout: &Layout,
+        op: candle_vulkan_kernels::ops::UnaryOp,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::ops::{call_unary_simple, call_unary_strided, UnaryStridedParams};
 
         // Only support F32 for now
         if self.dtype != DType::F32 {
             crate::bail!("Vulkan unary ops only support F32 for now");
         }
 
-        let num_elements = layout.shape().elem_count();
+        let shape = layout.shape();
+        let num_elements = shape.elem_count();
         let output_buffer = self.device.new_buffer(num_elements, self.dtype)?;
 
         let context = self.device.context();
         let kernels = self.device.kernels();
 
         // Allocate and record command buffer
-        let command_buffer = context.allocate_command_buffer()
+        let command_buffer = context
+            .allocate_command_buffer()
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate command buffer: {:?}", e)))?;
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
-            context.device.begin_command_buffer(command_buffer, &begin_info)
-                .map_err(|e| crate::Error::Msg(format!("Failed to begin command buffer: {:?}", e)))?;
+            context
+                .device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .map_err(|e| {
+                    crate::Error::Msg(format!("Failed to begin command buffer: {:?}", e))
+                })?;
         }
 
-        // Dispatch the kernel
-        kernel_fn(
-            kernels.as_ref(),
-            command_buffer,
-            num_elements,
-            self.vk_buffer(),
-            output_buffer.buffer(),
-        ).map_err(|e| crate::Error::Msg(format!("Kernel dispatch failed: {:?}", e)))?;
+        // Choose fast path (contiguous) or strided path
+        if layout.is_contiguous() {
+            // Fast path: use simple kernel with minimal push constants
+            call_unary_simple(
+                kernels.as_ref(),
+                command_buffer,
+                op,
+                num_elements,
+                self.vk_buffer(),
+                output_buffer.buffer(),
+            )
+            .map_err(|e| crate::Error::Msg(format!("Kernel dispatch failed: {:?}", e)))?;
+        } else {
+            // Strided path: use full stride support
+            // Output is always contiguous
+            let out_strides = shape.stride_contiguous();
+            let params = UnaryStridedParams::from_shape_strides_offset(
+                shape.dims(),
+                layout.stride(),
+                shape.dims(),
+                &out_strides,
+                layout.start_offset(),
+            );
+
+            call_unary_strided(
+                kernels.as_ref(),
+                command_buffer,
+                op,
+                &params,
+                self.vk_buffer(),
+                output_buffer.buffer(),
+            )
+            .map_err(|e| crate::Error::Msg(format!("Kernel dispatch failed: {:?}", e)))?;
+        }
 
         unsafe {
-            context.device.end_command_buffer(command_buffer)
+            context
+                .device
+                .end_command_buffer(command_buffer)
                 .map_err(|e| crate::Error::Msg(format!("Failed to end command buffer: {:?}", e)))?;
         }
 
         // Submit and wait
-        context.submit_and_wait(command_buffer)
+        context
+            .submit_and_wait(command_buffer)
             .map_err(|e| crate::Error::Msg(format!("Failed to submit command buffer: {:?}", e)))?;
 
         // Free command buffer
         unsafe {
-            context.device.free_command_buffers(context.command_pool, &[command_buffer]);
+            context
+                .device
+                .free_command_buffers(context.command_pool, &[command_buffer]);
         }
 
-        Ok(VulkanStorage::new(output_buffer, self.device.clone(), num_elements, self.dtype))
+        Ok(VulkanStorage::new(
+            output_buffer,
+            self.device.clone(),
+            num_elements,
+            self.dtype,
+        ))
     }
 
-    /// Execute a binary kernel operation
-    fn run_binary_kernel<F>(&self, rhs: &Self, lhs_l: &Layout, rhs_l: &Layout, kernel_fn: F) -> Result<Self>
-    where
-        F: FnOnce(
-            &candle_vulkan_kernels::Kernels,
-            vk::CommandBuffer,
-            usize,
-            vk::Buffer,
-            vk::Buffer,
-            vk::Buffer,
-        ) -> candle_vulkan_kernels::Result<()>,
-    {
-        // Only support contiguous tensors for now
-        if !lhs_l.is_contiguous() || !rhs_l.is_contiguous() {
-            crate::bail!("Vulkan binary ops only support contiguous tensors");
-        }
+    /// Execute a binary kernel operation with broadcasting support
+    fn run_binary_kernel_strided(
+        &self,
+        rhs: &Self,
+        lhs_l: &Layout,
+        rhs_l: &Layout,
+        op: candle_vulkan_kernels::ops::BinaryOp,
+    ) -> Result<Self> {
+        use candle_vulkan_kernels::ops::{call_binary_strided, BinaryParams, TensorLayout};
 
         // Only support F32 for now
         if self.dtype != DType::F32 || rhs.dtype != DType::F32 {
-            crate::bail!("Vulkan binary ops only support F32 for now");
+            crate::bail!("Vulkan binary ops only support F32 for now (got lhs={:?}, rhs={:?})", self.dtype, rhs.dtype);
         }
 
-        // Shapes must match for element-wise ops
-        if lhs_l.shape() != rhs_l.shape() {
-            crate::bail!("Vulkan binary ops require matching shapes (broadcasting not yet supported)");
-        }
+        // Compute broadcast output shape
+        let lhs_shape = lhs_l.shape();
+        let rhs_shape = rhs_l.shape();
+        let out_shape = lhs_shape.broadcast_shape_binary_op(rhs_shape, "binary_op")?;
+        let num_elements = out_shape.elem_count();
 
-        let num_elements = lhs_l.shape().elem_count();
+        // Create layouts for the shader (including offsets for narrow/slice operations)
+        let lhs_layout = TensorLayout::from_shape_strides_offset(lhs_shape.dims(), lhs_l.stride(), lhs_l.start_offset());
+        let rhs_layout = TensorLayout::from_shape_strides_offset(rhs_shape.dims(), rhs_l.stride(), rhs_l.start_offset());
+        // Output must use the broadcast shape with contiguous strides (not 1D)
+        let out_strides = out_shape.stride_contiguous();
+        let out_layout = TensorLayout::from_shape_strides_offset(out_shape.dims(), &out_strides, 0);
+
+        let params = BinaryParams::from_layouts(&lhs_layout, &rhs_layout, &out_layout);
+
         let output_buffer = self.device.new_buffer(num_elements, self.dtype)?;
 
         let context = self.device.context();
         let kernels = self.device.kernels();
 
         // Allocate and record command buffer
-        let command_buffer = context.allocate_command_buffer()
+        let command_buffer = context
+            .allocate_command_buffer()
             .map_err(|e| crate::Error::Msg(format!("Failed to allocate command buffer: {:?}", e)))?;
 
         let begin_info = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
-            context.device.begin_command_buffer(command_buffer, &begin_info)
-                .map_err(|e| crate::Error::Msg(format!("Failed to begin command buffer: {:?}", e)))?;
+            context
+                .device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .map_err(|e| {
+                    crate::Error::Msg(format!("Failed to begin command buffer: {:?}", e))
+                })?;
         }
 
         // Dispatch the kernel
-        kernel_fn(
+        call_binary_strided(
             kernels.as_ref(),
             command_buffer,
-            num_elements,
+            op,
+            &params,
             self.vk_buffer(),
             rhs.vk_buffer(),
             output_buffer.buffer(),
-        ).map_err(|e| crate::Error::Msg(format!("Kernel dispatch failed: {:?}", e)))?;
+        )
+        .map_err(|e| crate::Error::Msg(format!("Kernel dispatch failed: {:?}", e)))?;
 
         unsafe {
-            context.device.end_command_buffer(command_buffer)
+            context
+                .device
+                .end_command_buffer(command_buffer)
                 .map_err(|e| crate::Error::Msg(format!("Failed to end command buffer: {:?}", e)))?;
         }
 
         // Submit and wait
-        context.submit_and_wait(command_buffer)
+        context
+            .submit_and_wait(command_buffer)
             .map_err(|e| crate::Error::Msg(format!("Failed to submit command buffer: {:?}", e)))?;
 
         // Free command buffer
         unsafe {
-            context.device.free_command_buffers(context.command_pool, &[command_buffer]);
+            context
+                .device
+                .free_command_buffers(context.command_pool, &[command_buffer]);
         }
 
-        Ok(VulkanStorage::new(output_buffer, self.device.clone(), num_elements, self.dtype))
+        Ok(VulkanStorage::new(
+            output_buffer,
+            self.device.clone(),
+            num_elements,
+            self.dtype,
+        ))
     }
 }
 
@@ -309,15 +362,17 @@ impl BackendStorage for VulkanStorage {
     }
 
     fn unary_impl<B: UnaryOpT>(&self, layout: &Layout) -> Result<Self> {
-        use candle_vulkan_kernels::ops::{call_exp, call_gelu, call_relu, call_silu};
+        use candle_vulkan_kernels::ops::UnaryOp;
 
-        match B::NAME {
-            "exp" => self.run_unary_kernel(layout, |k, cb, n, i, o| call_exp(k, cb, n, i, o)),
-            "silu" => self.run_unary_kernel(layout, |k, cb, n, i, o| call_silu(k, cb, n, i, o)),
-            "gelu" => self.run_unary_kernel(layout, |k, cb, n, i, o| call_gelu(k, cb, n, i, o)),
-            "relu" => self.run_unary_kernel(layout, |k, cb, n, i, o| call_relu(k, cb, n, i, o)),
-            op => crate::bail!("Vulkan unary op '{}' not yet implemented", op),
-        }
+        let op = match B::NAME {
+            "exp" => UnaryOp::Exp,
+            "silu" => UnaryOp::Silu,
+            "gelu" => UnaryOp::Gelu,
+            "relu" => UnaryOp::Relu,
+            name => crate::bail!("Vulkan unary op '{}' not yet implemented", name),
+        };
+
+        self.run_unary_kernel_strided(layout, op)
     }
 
     fn binary_impl<B: BinaryOpT>(
@@ -326,14 +381,16 @@ impl BackendStorage for VulkanStorage {
         lhs_l: &Layout,
         rhs_l: &Layout,
     ) -> Result<Self> {
-        use candle_vulkan_kernels::ops::{call_add, call_div, call_mul};
+        use candle_vulkan_kernels::ops::BinaryOp;
 
-        match B::NAME {
-            "add" => self.run_binary_kernel(rhs, lhs_l, rhs_l, |k, cb, n, a, b, o| call_add(k, cb, n, a, b, o)),
-            "mul" => self.run_binary_kernel(rhs, lhs_l, rhs_l, |k, cb, n, a, b, o| call_mul(k, cb, n, a, b, o)),
-            "div" => self.run_binary_kernel(rhs, lhs_l, rhs_l, |k, cb, n, a, b, o| call_div(k, cb, n, a, b, o)),
-            op => crate::bail!("Vulkan binary op '{}' not yet implemented", op),
-        }
+        let op = match B::NAME {
+            "add" => BinaryOp::Add,
+            "mul" => BinaryOp::Mul,
+            "div" => BinaryOp::Div,
+            name => crate::bail!("Vulkan binary op '{}' not yet implemented", name),
+        };
+
+        self.run_binary_kernel_strided(rhs, lhs_l, rhs_l, op)
     }
 
     fn where_cond(
