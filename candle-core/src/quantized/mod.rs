@@ -549,16 +549,14 @@ impl crate::CustomOp1 for QTensor {
 
     fn vulkan_fwd(
         &self,
-        _storage: &crate::VulkanStorage,
-        _layout: &crate::Layout,
+        storage: &crate::VulkanStorage,
+        layout: &crate::Layout,
     ) -> Result<(crate::VulkanStorage, Shape)> {
-        // For now, Vulkan quantized matmul is not directly supported.
-        // Use QMatMul with dequantization (set CANDLE_DEQUANTIZE_ALL=1) or
-        // the tensor will be dequantized before the matmul.
-        //
-        // TODO: Implement fused quantized matmul shaders (mul_mat_vec_q4_0, etc.)
-        // The dequant shaders are already ported and can be extended.
-        crate::bail!("Direct vulkan_fwd for quantized tensors not yet implemented. The weights will be dequantized automatically.")
+        let self_storage = match &self.storage {
+            QStorage::Vulkan(vulkan) => vulkan,
+            _ => unreachable!("Cannot call vulkan matmul on non vulkan QTensor"),
+        };
+        self_storage.fwd(&self.shape, storage, layout)
     }
 }
 

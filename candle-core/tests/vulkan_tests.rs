@@ -4,7 +4,7 @@
 
 #![cfg(feature = "vulkan")]
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 
 fn get_vulkan_device() -> Result<Device> {
     Device::new_vulkan(0)
@@ -656,5 +656,215 @@ fn test_vulkan_qtensor_dequantize_to_cpu_matmul() -> Result<()> {
         "QTensor Vulkan dequantize + CPU matmul test passed! Max diff: {:.6}",
         max_diff
     );
+    Ok(())
+}
+
+/// Stress test for descriptor pool management
+/// This would previously fail with ERROR_OUT_OF_POOL_MEMORY after ~64 operations
+#[test]
+fn test_vulkan_descriptor_pool_stress() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    let a = Tensor::randn(0f32, 1.0, (64, 64), &device)?;
+    let b = Tensor::randn(0f32, 1.0, (64, 64), &device)?;
+
+    // Run many operations without explicit sync - tests pool growth
+    for i in 0..100 {
+        let _ = (&a + &b)?;
+        let _ = (&a * &b)?;
+        let _ = a.exp()?;
+        let _ = a.relu()?;
+        if i % 20 == 0 {
+            // Periodic sync resets the descriptor set index
+            device.synchronize()?;
+        }
+    }
+
+    // Final sync
+    device.synchronize()?;
+
+    println!("Descriptor pool stress test passed! (400 ops without exhaustion)");
+    Ok(())
+}
+
+/// Test Q4K quantize, dequantize roundtrip
+#[test]
+fn test_vulkan_q4k_quantize_dequantize() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Q4K has block size of 256, so use dimensions divisible by 256
+    let nrows = 4;
+    let ncols = 256;
+
+    // Create random f32 data on CPU
+    let cpu_tensor = Tensor::randn(0f32, 1.0, (nrows, ncols), &Device::Cpu)?;
+
+    // Quantize to Q4K
+    let qtensor = QTensor::quantize(&cpu_tensor, GgmlDType::Q4K)?;
+
+    // Dequantize on CPU (reference)
+    let cpu_dequant = qtensor.dequantize(&Device::Cpu)?;
+
+    // Dequantize on Vulkan
+    let vulkan_dequant = qtensor.dequantize(&device)?;
+    let vulkan_result = vulkan_dequant.to_device(&Device::Cpu)?;
+
+    // Compare
+    let cpu_vals = cpu_dequant.flatten_all()?.to_vec1::<f32>()?;
+    let vulkan_vals = vulkan_result.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut max_diff: f32 = 0.0;
+    for (i, (&cpu_val, &vulkan_val)) in cpu_vals.iter().zip(vulkan_vals.iter()).enumerate() {
+        let diff = (cpu_val - vulkan_val).abs();
+        if diff > max_diff {
+            max_diff = diff;
+        }
+        assert!(
+            diff < 1e-4,
+            "Q4K dequantize mismatch at {}: cpu={}, vulkan={}, diff={}",
+            i, cpu_val, vulkan_val, diff
+        );
+    }
+
+    println!("Q4K quantize/dequantize test passed! Max diff: {:.6}", max_diff);
+    Ok(())
+}
+
+/// Test Q4K fused matmul kernel against CPU reference
+#[test]
+fn test_vulkan_q4k_matmul() -> Result<()> {
+    use candle_core::quantized::QMatMul;
+
+    let device = get_vulkan_device()?;
+
+    // Q4K has block size of 256, so k must be divisible by 256
+    let n = 64;   // output features (rows in weight matrix)
+    let k = 256;  // input features (must be multiple of 256 for Q4K)
+    let batch = 4;
+
+    // Create random weight matrix on CPU
+    let weight_data: Vec<f32> = (0..(n * k))
+        .map(|i| ((i % 100) as f32 - 50.0) * 0.01)
+        .collect();
+    let cpu_weight_tensor = Tensor::from_vec(weight_data.clone(), (n, k), &Device::Cpu)?;
+
+    // Create input data
+    let input_data: Vec<f32> = (0..(batch * k)).map(|i| (i % 50) as f32 * 0.02).collect();
+    let cpu_input = Tensor::from_vec(input_data.clone(), (batch, k), &Device::Cpu)?;
+
+    // Quantize weights to Q4K on CPU and run CPU reference
+    let cpu_qweight = QTensor::quantize(&cpu_weight_tensor, GgmlDType::Q4K)?;
+    let cpu_qmatmul = QMatMul::from_qtensor(cpu_qweight)?;
+    let cpu_result = cpu_qmatmul.forward(&cpu_input)?;
+    let expected = cpu_result.to_vec2::<f32>()?;
+
+    // Now create weight tensor on Vulkan and quantize there
+    let vulkan_weight_tensor = Tensor::from_vec(weight_data, (n, k), &device)?;
+    let vulkan_qweight = QTensor::quantize(&vulkan_weight_tensor, GgmlDType::Q4K)?;
+    let vulkan_qmatmul = QMatMul::from_qtensor(vulkan_qweight)?;
+
+    // Create input on Vulkan
+    let vulkan_input = Tensor::from_vec(input_data, (batch, k), &device)?;
+
+    let vulkan_result = vulkan_qmatmul.forward(&vulkan_input)?;
+    let vulkan_result_cpu = vulkan_result.to_device(&Device::Cpu)?;
+    let result_vec = vulkan_result_cpu.to_vec2::<f32>()?;
+
+    // Compare results - allow some tolerance for quantization differences
+    let mut max_diff: f32 = 0.0;
+    let mut total_error: f32 = 0.0;
+    for (i, (got_row, exp_row)) in result_vec.iter().zip(expected.iter()).enumerate() {
+        for (j, (got, exp)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+            let diff = (got - exp).abs();
+            if diff > max_diff {
+                max_diff = diff;
+            }
+            total_error += diff;
+            // Allow reasonable tolerance for GPU vs CPU quantized matmul
+            // Similar to CUDA/Metal tolerances in quantized_tests.rs
+            assert!(
+                diff < 1.0,
+                "Q4K matmul mismatch at [{},{}]: got {}, expected {}, diff {}",
+                i, j, got, exp, diff
+            );
+        }
+    }
+
+    let avg_error = total_error / (batch * n) as f32;
+    println!(
+        "Q4K Vulkan matmul test passed! Max diff: {:.4}, Avg diff: {:.4}",
+        max_diff, avg_error
+    );
+
+    // Also verify the shape is correct
+    assert_eq!(vulkan_result.dims(), &[batch, n]);
+
+    Ok(())
+}
+
+/// Test Q4K matmul with larger dimensions (stress test)
+#[test]
+fn test_vulkan_q4k_matmul_large() -> Result<()> {
+    use candle_core::quantized::QMatMul;
+
+    let device = get_vulkan_device()?;
+
+    // Larger dimensions similar to typical LLM layers
+    let n = 512;   // output features
+    let k = 512;   // input features (multiple of 256)
+    let batch = 8;
+
+    // Create random weight matrix on CPU first for reference
+    let cpu_weight_tensor = Tensor::randn(0f32, 0.1, (n, k), &Device::Cpu)?;
+
+    // Quantize weights to Q4K on CPU and create CPU reference
+    let cpu_qweight = QTensor::quantize(&cpu_weight_tensor, GgmlDType::Q4K)?;
+    let cpu_qmatmul = QMatMul::from_qtensor(cpu_qweight)?;
+
+    // Create weight tensor on Vulkan and quantize there
+    let vulkan_weight_tensor = cpu_weight_tensor.to_device(&device)?;
+    let vulkan_qweight = QTensor::quantize(&vulkan_weight_tensor, GgmlDType::Q4K)?;
+    let vulkan_qmatmul = QMatMul::from_qtensor(vulkan_qweight)?;
+
+    // Create random input on Vulkan
+    let vulkan_input = Tensor::randn(0f32, 1.0, (batch, k), &device)?;
+    let cpu_input = vulkan_input.to_device(&Device::Cpu)?;
+
+    // Run on Vulkan
+    let vulkan_result = vulkan_qmatmul.forward(&vulkan_input)?;
+    let vulkan_result_cpu = vulkan_result.to_device(&Device::Cpu)?;
+
+    // Run on CPU for reference
+    let cpu_result = cpu_qmatmul.forward(&cpu_input)?;
+
+    // Compare
+    let vulkan_vals = vulkan_result_cpu.flatten_all()?.to_vec1::<f32>()?;
+    let cpu_vals = cpu_result.flatten_all()?.to_vec1::<f32>()?;
+
+    let mut max_diff: f32 = 0.0;
+    for (&v, &c) in vulkan_vals.iter().zip(cpu_vals.iter()) {
+        let diff = (v - c).abs();
+        if diff > max_diff {
+            max_diff = diff;
+        }
+    }
+
+    // Compute relative error
+    let cpu_abs_sum: f32 = cpu_vals.iter().map(|x| x.abs()).sum();
+    let diff_sum: f32 = vulkan_vals.iter().zip(cpu_vals.iter()).map(|(v, c)| (v - c).abs()).sum();
+    let rel_error = diff_sum / cpu_abs_sum;
+
+    println!(
+        "Q4K large matmul test: max_diff={:.4}, rel_error={:.6}",
+        max_diff, rel_error
+    );
+
+    // Allow 2% relative error (similar to quantized_tests.rs tolerance)
+    assert!(
+        rel_error < 0.02,
+        "Relative error {:.4} exceeds threshold",
+        rel_error
+    );
+
     Ok(())
 }

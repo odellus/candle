@@ -254,6 +254,8 @@ impl BackendDevice for VulkanDevice {
                 .device_wait_idle()
                 .map_err(|e| crate::Error::Msg(format!("Failed to synchronize: {:?}", e)))?;
         }
+        // Reset descriptor set index for reuse (llama.cpp style)
+        self.kernels.reset_descriptor_sets();
         Ok(())
     }
 }

@@ -103,6 +103,17 @@ fn main() {
         ShaderVariant { name: "dequant_q8_0_f32", source: "dequant_q8_0.comp", defines: &[
             ("D_TYPE", "float"),
         ]},
+
+        // Matrix-vector multiplication shaders (quantized)
+        // Q4K uses dedicated optimized shader from llama.cpp
+        ShaderVariant { name: "mul_mat_vec_q4_k_f32", source: "mul_mat_vec_q4_k.comp", defines: &[
+            ("DATA_A_Q4_K", "1"),
+            ("B_TYPE", "float"),
+            ("B_TYPE_VEC2", "vec2"),
+            ("B_TYPE_VEC4", "vec4"),
+            ("D_TYPE", "float"),
+            ("FLOAT_TYPE", "float"),
+        ]},
     ];
 
     for variant in &variants {
@@ -158,7 +169,7 @@ fn compile_ggml_shader(
             println!("cargo:warning=Compiled {} -> {}.spv", variant.source, variant.name);
         }
         Err(e) => {
-            println!("cargo:warning=Failed to compile {}: {}", variant.name, e);
+            panic!("Failed to compile {}: {}", variant.name, e);
         }
     }
 }

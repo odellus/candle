@@ -30,6 +30,9 @@ pub enum VulkanError {
 
     #[error("Allocator error: {0}")]
     Allocator(String),
+
+    #[error("Descriptor pool exhausted")]
+    DescriptorPoolExhausted,
 }
 
 pub type Result<T> = std::result::Result<T, VulkanError>;

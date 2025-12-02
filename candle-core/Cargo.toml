@@ -75,3 +75,7 @@ required-features = ["metal"]
 [[example]]
 name = "cuda_basics"
 required-features = ["cuda"]
+
+[[example]]
+name = "vulkan_basics"
+required-features = ["vulkan"]

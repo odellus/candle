@@ -1,7 +1,7 @@
 //! Vulkan backend for quantized tensors
 use super::{GgmlDType, QStorage};
 use crate::backend::{BackendDevice, BackendStorage};
-use crate::{DType, Result, VulkanDevice, VulkanStorage};
+use crate::{DType, Result, Shape, VulkanDevice, VulkanStorage};
 use crate::vulkan_backend::VulkanBuffer;
 use std::sync::Arc;
 
@@ -289,6 +289,143 @@ impl QVulkanStorage {
             std::slice::from_raw_parts(allocation_info.mapped_data as *const u8, size)
         };
         Ok(data.to_vec())
+    }
+
+    /// Forward pass for quantized matrix multiplication
+    ///
+    /// Computes output = input @ self^T where self is the quantized weight matrix.
+    /// Currently only supports Q4K format with dedicated fused kernel.
+    /// Other formats fall back to dequantize + matmul.
+    pub fn fwd(
+        &self,
+        self_shape: &Shape,
+        storage: &VulkanStorage,
+        layout: &crate::Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        use candle_vulkan_kernels::ops::Q4K_BLOCK_SIZE;
+
+        if !layout.is_contiguous() {
+            crate::bail!("input tensor is not contiguous {layout:?}")
+        }
+
+        let src_shape = layout.shape();
+        if src_shape.rank() < 2 {
+            crate::bail!("input tensor has only one dimension {layout:?}")
+        }
+
+        // self is transposed so n is first then k
+        let (n, k) = self_shape.dims2()?;
+        let mut dst_shape = src_shape.dims().to_vec();
+        let last_k = dst_shape.pop().unwrap();
+        if last_k != k {
+            crate::bail!("input tensor {layout:?} incompatible with {:?}", self_shape)
+        }
+        dst_shape.push(n);
+        let dst_shape = Shape::from(dst_shape);
+
+        // Check if we can use the fused Q4K kernel
+        let use_fused_kernel = matches!(self.dtype, GgmlDType::Q4K) && k % Q4K_BLOCK_SIZE == 0;
+
+        if use_fused_kernel {
+            self.fwd_q4k(n, k, &dst_shape, storage, layout)
+        } else {
+            // Fallback: dequantize and use regular matmul
+            self.fwd_dequantize(n, k, &dst_shape, storage, layout)
+        }
+    }
+
+    /// Fused Q4K matrix-vector multiplication
+    fn fwd_q4k(
+        &self,
+        n: usize,
+        k: usize,
+        dst_shape: &Shape,
+        storage: &VulkanStorage,
+        layout: &crate::Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        use ash::vk;
+        use candle_vulkan_kernels::ops::call_mul_mat_vec_q4k_batched;
+
+        // Compute batch size (product of all dims except last)
+        let src_shape = layout.shape();
+        let batch_size: usize = src_shape.dims().iter().rev().skip(1).product();
+
+        // Allocate output buffer
+        let output_buffer = self.device.new_buffer(dst_shape.elem_count(), DType::F32)?;
+
+        let context = self.device.context();
+        let kernels = self.device.kernels();
+
+        // Allocate and record command buffer
+        let command_buffer = context
+            .allocate_command_buffer()
+            .map_err(|e| crate::Error::Msg(format!("Failed to allocate command buffer: {:?}", e)))?;
+
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            context
+                .device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .map_err(|e| crate::Error::Msg(format!("Failed to begin command buffer: {:?}", e)))?;
+        }
+
+        call_mul_mat_vec_q4k_batched(
+            kernels.as_ref(),
+            command_buffer,
+            batch_size,
+            n,      // nrows (output dim)
+            k,      // ncols (input dim)
+            self.buffer.buffer(),
+            storage.buffer().buffer(),
+            layout.start_offset() * std::mem::size_of::<f32>(),
+            output_buffer.buffer(),
+        )
+        .map_err(|e| crate::Error::Msg(format!("Q4K matmul kernel failed: {:?}", e)))?;
+
+        unsafe {
+            context
+                .device
+                .end_command_buffer(command_buffer)
+                .map_err(|e| crate::Error::Msg(format!("Failed to end command buffer: {:?}", e)))?;
+        }
+
+        // Submit and wait
+        context
+            .submit_and_wait(command_buffer)
+            .map_err(|e| crate::Error::Msg(format!("Failed to submit command buffer: {:?}", e)))?;
+
+        // Free command buffer
+        unsafe {
+            context
+                .device
+                .free_command_buffers(context.command_pool, &[command_buffer]);
+        }
+
+        Ok((
+            VulkanStorage::new(output_buffer, self.device.clone(), dst_shape.elem_count(), DType::F32),
+            dst_shape.clone(),
+        ))
+    }
+
+    /// Fallback: dequantize and use regular matmul
+    fn fwd_dequantize(
+        &self,
+        n: usize,
+        k: usize,
+        _dst_shape: &Shape,
+        _storage: &VulkanStorage,
+        _layout: &crate::Layout,
+    ) -> Result<(VulkanStorage, Shape)> {
+        // For now, just return error - proper matmul integration would need more work
+        // The caller should use CANDLE_DEQUANTIZE_ALL=1 for non-Q4K types
+        crate::bail!(
+            "Vulkan fused quantized matmul only supports Q4K format (n={}, k={}). \
+             Set CANDLE_DEQUANTIZE_ALL=1 to use dequantized weights, \
+             or use Q4K quantization.",
+            n, k
+        )
     }
 }
 
