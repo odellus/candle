@@ -43,6 +43,10 @@ pub mod source {
 
     // Copy (strided)
     pub const COPY_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/copy_f32.spv"));
+
+    // Dequantization shaders
+    pub const DEQUANT_Q4_0_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/dequant_q4_0_f32.spv"));
+    pub const DEQUANT_Q8_0_F32: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shaders/dequant_q8_0_f32.spv"));
 }
 
 /// A cached compute pipeline with its layout

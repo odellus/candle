@@ -95,6 +95,14 @@ fn main() {
         ShaderVariant { name: "copy_f32", source: "copy.comp", defines: &[
             ("A_TYPE", "float"), ("D_TYPE", "float"),
         ]},
+
+        // Dequantization shaders
+        ShaderVariant { name: "dequant_q4_0_f32", source: "dequant_q4_0.comp", defines: &[
+            ("D_TYPE", "float"),
+        ]},
+        ShaderVariant { name: "dequant_q8_0_f32", source: "dequant_q8_0.comp", defines: &[
+            ("D_TYPE", "float"),
+        ]},
     ];
 
     for variant in &variants {

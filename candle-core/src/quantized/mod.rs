@@ -22,6 +22,13 @@ pub mod cuda;
 mod cuda {
     pub use super::dummy_cuda::*;
 }
+#[cfg(feature = "vulkan")]
+pub mod vulkan;
+mod dummy_vulkan;
+#[cfg(not(feature = "vulkan"))]
+mod vulkan {
+    pub use super::dummy_vulkan::*;
+}
 
 #[cfg(target_feature = "neon")]
 pub mod neon;
@@ -52,8 +59,9 @@ impl Device {
                 let storage = cuda::QCudaStorage::zeros(cuda, elem_count, dtype)?;
                 Ok(QStorage::Cuda(storage))
             }
-            Device::Vulkan(_) => {
-                crate::bail!("Quantized tensors not yet supported on Vulkan")
+            Device::Vulkan(vk) => {
+                let storage = vulkan::QVulkanStorage::zeros(vk, elem_count, dtype)?;
+                Ok(QStorage::Vulkan(storage))
             }
         }
     }
@@ -63,6 +71,7 @@ pub enum QStorage {
     Cpu(Box<dyn QuantizedType>),
     Metal(metal::QMetalStorage),
     Cuda(cuda::QCudaStorage),
+    Vulkan(vulkan::QVulkanStorage),
 }
 
 impl QStorage {
@@ -71,6 +80,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.block_size(),
             QStorage::Metal(storage) => storage.dtype().block_size(),
             QStorage::Cuda(storage) => storage.dtype().block_size(),
+            QStorage::Vulkan(storage) => storage.dtype().block_size(),
         }
     }
 
@@ -79,6 +89,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.dtype(),
             QStorage::Metal(storage) => storage.dtype(),
             QStorage::Cuda(storage) => storage.dtype(),
+            QStorage::Vulkan(storage) => storage.dtype(),
         }
     }
 
@@ -87,6 +98,7 @@ impl QStorage {
             QStorage::Cpu(_storage) => Device::Cpu,
             QStorage::Metal(storage) => Device::Metal(storage.device().clone()),
             QStorage::Cuda(storage) => Device::Cuda(storage.device().clone()),
+            QStorage::Vulkan(storage) => Device::Vulkan(storage.device().clone()),
         }
     }
 
@@ -95,6 +107,7 @@ impl QStorage {
             QStorage::Cpu(storage) => storage.storage_size_in_bytes(),
             QStorage::Metal(storage) => storage.storage_size_in_bytes(),
             QStorage::Cuda(storage) => storage.storage_size_in_bytes(),
+            QStorage::Vulkan(storage) => storage.storage_size_in_bytes(),
         }
     }
 
@@ -105,6 +118,7 @@ impl QStorage {
             }
             (QStorage::Metal(storage), Storage::Metal(src)) => storage.quantize(src)?,
             (QStorage::Cuda(storage), Storage::Cuda(src)) => storage.quantize(src)?,
+            (QStorage::Vulkan(storage), Storage::Vulkan(src)) => storage.quantize(src)?,
             _ => crate::bail!("Invalid dequantize storage locations do not match"),
         }
         Ok(())
@@ -115,6 +129,7 @@ impl QStorage {
             QStorage::Cpu(storage) => Ok(Storage::Cpu(storage.dequantize(elem_count)?)),
             QStorage::Metal(storage) => Ok(Storage::Metal(storage.dequantize(elem_count)?)),
             QStorage::Cuda(storage) => Ok(Storage::Cuda(storage.dequantize(elem_count)?)),
+            QStorage::Vulkan(storage) => Ok(Storage::Vulkan(storage.dequantize(elem_count)?)),
         }
     }
 
@@ -126,7 +141,7 @@ impl QStorage {
                 let data = unsafe { std::slice::from_raw_parts(data_ptr, size_in_bytes) };
                 Ok(Cow::from(data))
             }
-            QStorage::Metal(_) | QStorage::Cuda(_) => {
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => {
                 crate::bail!("not implemented");
             }
         }
@@ -499,7 +514,7 @@ impl crate::CustomOp1 for QTensor {
         #[allow(clippy::infallible_destructuring_match)]
         let self_storage = match &self.storage {
             QStorage::Cpu(storage) => storage,
-            QStorage::Metal(_) | QStorage::Cuda(_) => crate::bail!("Invalid storage"),
+            QStorage::Metal(_) | QStorage::Cuda(_) | QStorage::Vulkan(_) => crate::bail!("Invalid storage"),
         };
         let slice = storage.as_slice::<f32>()?;
         let slice = &slice[layout.start_offset()..layout.start_offset() + src_shape.elem_count()];
@@ -530,6 +545,20 @@ impl crate::CustomOp1 for QTensor {
             _ => unreachable!("Cannot call cuda matmul on non cuda QTensor"),
         };
         self_storage.fwd(&self.shape, storage, layout)
+    }
+
+    fn vulkan_fwd(
+        &self,
+        _storage: &crate::VulkanStorage,
+        _layout: &crate::Layout,
+    ) -> Result<(crate::VulkanStorage, Shape)> {
+        // For now, Vulkan quantized matmul is not directly supported.
+        // Use QMatMul with dequantization (set CANDLE_DEQUANTIZE_ALL=1) or
+        // the tensor will be dequantized before the matmul.
+        //
+        // TODO: Implement fused quantized matmul shaders (mul_mat_vec_q4_0, etc.)
+        // The dequant shaders are already ported and can be extended.
+        crate::bail!("Direct vulkan_fwd for quantized tensors not yet implemented. The weights will be dequantized automatically.")
     }
 }
 

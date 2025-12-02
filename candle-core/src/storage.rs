@@ -248,8 +248,9 @@ impl Storage {
                 let (storage, shape) = c.metal_fwd(storage, l)?;
                 Ok((Self::Metal(storage), shape))
             }
-            Self::Vulkan(_storage) => {
-                crate::bail!("Custom ops not yet supported on Vulkan")
+            Self::Vulkan(storage) => {
+                let (storage, shape) = c.vulkan_fwd(storage, l)?;
+                Ok((Self::Vulkan(storage), shape))
             }
         }
     }

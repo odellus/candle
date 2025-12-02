@@ -527,3 +527,134 @@ fn test_vulkan_strided_binary() -> Result<()> {
     println!("Strided binary test passed!");
     Ok(())
 }
+
+// ============ Quantization tests ============
+
+use candle_core::quantized::{GgmlDType, QTensor};
+
+#[test]
+fn test_vulkan_quantize_dequantize_q4_0() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Create a tensor with values suitable for quantization
+    // Q4_0 has block_size of 32, so use multiples of 32
+    let n = 128;
+    let data: Vec<f32> = (0..n).map(|i| (i as f32 - 64.0) * 0.1).collect();
+    let cpu_tensor = Tensor::from_vec(data.clone(), (n,), &Device::Cpu)?;
+
+    // Quantize on CPU first, then test dequantization on Vulkan
+    let qtensor = QTensor::quantize(&cpu_tensor, GgmlDType::Q4_0)?;
+
+    // Get the expected dequantized result from CPU
+    let cpu_dequant = qtensor.dequantize(&Device::Cpu)?;
+    let expected = cpu_dequant.to_vec1::<f32>()?;
+
+    // Now dequantize to Vulkan device
+    let vulkan_dequant = qtensor.dequantize(&device)?;
+    let result = vulkan_dequant.to_vec1::<f32>()?;
+
+    // Compare results - they should be identical since both use CPU dequant for now
+    for (i, (got, exp)) in result.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (got - exp).abs() < 1e-5,
+            "Q4_0 dequant mismatch at {}: got {}, expected {}",
+            i,
+            got,
+            exp
+        );
+    }
+    println!("Q4_0 quantize/dequantize test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_quantize_dequantize_q8_0() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Q8_0 also has block_size of 32
+    let n = 128;
+    let data: Vec<f32> = (0..n).map(|i| (i as f32 - 64.0) * 0.05).collect();
+    let cpu_tensor = Tensor::from_vec(data.clone(), (n,), &Device::Cpu)?;
+
+    // Quantize
+    let qtensor = QTensor::quantize(&cpu_tensor, GgmlDType::Q8_0)?;
+
+    // Get expected from CPU
+    let cpu_dequant = qtensor.dequantize(&Device::Cpu)?;
+    let expected = cpu_dequant.to_vec1::<f32>()?;
+
+    // Dequantize to Vulkan
+    let vulkan_dequant = qtensor.dequantize(&device)?;
+    let result = vulkan_dequant.to_vec1::<f32>()?;
+
+    for (i, (got, exp)) in result.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (got - exp).abs() < 1e-5,
+            "Q8_0 dequant mismatch at {}: got {}, expected {}",
+            i,
+            got,
+            exp
+        );
+    }
+    println!("Q8_0 quantize/dequantize test passed!");
+    Ok(())
+}
+
+#[test]
+fn test_vulkan_qtensor_dequantize_to_cpu_matmul() -> Result<()> {
+    let device = get_vulkan_device()?;
+
+    // Create weight matrix (will be quantized) - n x k (transposed storage)
+    // Using dimensions that are multiples of 32 for Q4_0
+    let n = 64; // output features
+    let k = 128; // input features
+    let weight_data: Vec<f32> = (0..(n * k))
+        .map(|i| ((i % 100) as f32 - 50.0) * 0.01)
+        .collect();
+    let weight_tensor = Tensor::from_vec(weight_data.clone(), (n, k), &Device::Cpu)?;
+
+    // Quantize weights on CPU
+    let qweight = QTensor::quantize(&weight_tensor, GgmlDType::Q4_0)?;
+
+    // Dequantize to Vulkan device, then transfer back to CPU for matmul
+    // (Since Vulkan matmul isn't implemented yet)
+    let dequant_weight_vulkan = qweight.dequantize(&device)?;
+    let dequant_weight = dequant_weight_vulkan.to_device(&Device::Cpu)?;
+
+    // Create input on CPU
+    let batch = 4;
+    let input_data: Vec<f32> = (0..(batch * k)).map(|i| (i % 50) as f32 * 0.02).collect();
+    let input = Tensor::from_vec(input_data.clone(), (batch, k), &Device::Cpu)?;
+
+    // Compute matmul on CPU with Vulkan-dequantized weights
+    let result = input.matmul(&dequant_weight.t()?)?;
+    let result_vec = result.to_vec2::<f32>()?;
+
+    // Compute reference on CPU with CPU-dequantized weights
+    let cpu_dequant = qweight.dequantize(&Device::Cpu)?;
+    let cpu_result = input.matmul(&cpu_dequant.t()?)?;
+    let expected = cpu_result.to_vec2::<f32>()?;
+
+    // Compare - should be identical since both use same dequantization
+    let mut max_diff = 0.0f32;
+    for (i, (got_row, exp_row)) in result_vec.iter().zip(expected.iter()).enumerate() {
+        for (j, (got, exp)) in got_row.iter().zip(exp_row.iter()).enumerate() {
+            let diff = (got - exp).abs();
+            max_diff = max_diff.max(diff);
+            assert!(
+                diff < 1e-5,
+                "Dequant matmul mismatch at [{},{}]: got {}, expected {}, diff {}",
+                i,
+                j,
+                got,
+                exp,
+                diff
+            );
+        }
+    }
+    println!(
+        "QTensor Vulkan dequantize + CPU matmul test passed! Max diff: {:.6}",
+        max_diff
+    );
+    Ok(())
+}
