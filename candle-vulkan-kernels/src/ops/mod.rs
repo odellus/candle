@@ -10,8 +10,12 @@ pub use binary::{
     call_add, call_binary, call_binary_strided, call_div, call_mul, BinaryOp, BinaryParams,
     TensorLayout,
 };
-pub use matvec::{call_matvec, call_mul_mat_vec_q4k, call_mul_mat_vec_q4k_batched, MulMatVecQ4KParams, Q4K_BLOCK_SIZE};
+pub use matvec::{
+    call_matvec, call_mul_mat_vec_q4k, call_mul_mat_vec_q4k_batched, call_mul_mat_vec_quant,
+    MulMatVecQ4KParams, QuantType, Q4K_BLOCK_SIZE, Q4_0_BLOCK_SIZE, Q4_1_BLOCK_SIZE,
+    Q5_0_BLOCK_SIZE, Q5_1_BLOCK_SIZE, Q8_0_BLOCK_SIZE,
+};
 pub use unary::{
-    call_exp, call_gelu, call_relu, call_silu, call_unary_simple, call_unary_strided,
-    UnaryOp, UnaryStridedParams,
+    call_exp, call_gelu, call_relu, call_silu, call_unary_simple, call_unary_strided, UnaryOp,
+    UnaryStridedParams,
 };

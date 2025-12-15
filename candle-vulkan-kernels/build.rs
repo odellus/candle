@@ -1,7 +1,9 @@
 //! Build script - compiles GLSL shaders to SPIR-V
 //! Handles #include preprocessing like ggml-vulkan
 
-use shaderc::{Compiler, CompileOptions, ShaderKind, IncludeType, ResolvedInclude, IncludeCallbackResult};
+use shaderc::{
+    CompileOptions, Compiler, IncludeCallbackResult, IncludeType, ResolvedInclude, ShaderKind,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,9 +23,7 @@ fn main() {
     let compiler = Compiler::new().expect("Failed to create shader compiler");
 
     // Our simple shaders (no includes)
-    let simple_shaders = [
-        ("matvec.comp", ShaderKind::Compute),
-    ];
+    let simple_shaders = [("matvec.comp", ShaderKind::Compute)];
 
     for (shader_name, shader_kind) in simple_shaders {
         let shader_path = Path::new("src/shaders").join(shader_name);
@@ -59,61 +59,239 @@ fn main() {
     // Each variant has a name, source file, and preprocessor defines
     let variants: Vec<ShaderVariant> = vec![
         // Unary ops - f32 contiguous (use generic_head.glsl - simple KX/KY params)
-        ShaderVariant { name: "exp_f32", source: "exp.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
-        ShaderVariant { name: "silu_f32", source: "silu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
-        ShaderVariant { name: "gelu_f32", source: "gelu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
-        ShaderVariant { name: "relu_f32", source: "relu.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float")] },
-
+        ShaderVariant {
+            name: "exp_f32",
+            source: "exp.comp",
+            defines: &[("A_TYPE", "float"), ("D_TYPE", "float")],
+        },
+        ShaderVariant {
+            name: "silu_f32",
+            source: "silu.comp",
+            defines: &[("A_TYPE", "float"), ("D_TYPE", "float")],
+        },
+        ShaderVariant {
+            name: "gelu_f32",
+            source: "gelu.comp",
+            defines: &[("A_TYPE", "float"), ("D_TYPE", "float")],
+        },
+        ShaderVariant {
+            name: "relu_f32",
+            source: "relu.comp",
+            defines: &[("A_TYPE", "float"), ("D_TYPE", "float")],
+        },
         // Unary ops - f32 strided (use generic_unary_head.glsl - full stride support)
-        ShaderVariant { name: "exp_f32_strided", source: "exp_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "silu_f32_strided", source: "silu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "gelu_f32_strided", source: "gelu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "relu_f32_strided", source: "relu_strided.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-
+        ShaderVariant {
+            name: "exp_f32_strided",
+            source: "exp_strided.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "silu_f32_strided",
+            source: "silu_strided.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "gelu_f32_strided",
+            source: "gelu_strided.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "relu_f32_strided",
+            source: "relu_strided.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
         // Other strided unary ops (already use generic_unary_head.glsl)
-        ShaderVariant { name: "sqrt_f32", source: "sqrt.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "sin_f32", source: "sin.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "cos_f32", source: "cos.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "clamp_f32", source: "clamp.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-        ShaderVariant { name: "scale_f32", source: "scale.comp", defines: &[("A_TYPE", "float"), ("D_TYPE", "float"), ("FLOAT_TYPE", "float")] },
-
+        ShaderVariant {
+            name: "sqrt_f32",
+            source: "sqrt.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "sin_f32",
+            source: "sin.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "cos_f32",
+            source: "cos.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "clamp_f32",
+            source: "clamp.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "scale_f32",
+            source: "scale.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
         // Binary ops - f32 (already use generic_binary_head.glsl with full stride/broadcast support)
-        ShaderVariant { name: "add_f32", source: "add.comp", defines: &[
-            ("A_TYPE", "float"), ("B_TYPE", "float"), ("D_TYPE", "float"),
-            ("FLOAT_TYPE", "float"), ("QUANT_K", "1"), ("QUANT_R", "1"),
-        ]},
-        ShaderVariant { name: "mul_f32", source: "mul.comp", defines: &[
-            ("A_TYPE", "float"), ("B_TYPE", "float"), ("D_TYPE", "float"),
-            ("FLOAT_TYPE", "float"), ("QUANT_K", "1"), ("QUANT_R", "1"),
-        ]},
-        ShaderVariant { name: "div_f32", source: "div.comp", defines: &[
-            ("A_TYPE", "float"), ("B_TYPE", "float"), ("D_TYPE", "float"),
-            ("FLOAT_TYPE", "float"), ("QUANT_K", "1"), ("QUANT_R", "1"),
-        ]},
-
+        ShaderVariant {
+            name: "add_f32",
+            source: "add.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("B_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+                ("QUANT_K", "1"),
+                ("QUANT_R", "1"),
+            ],
+        },
+        ShaderVariant {
+            name: "mul_f32",
+            source: "mul.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("B_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+                ("QUANT_K", "1"),
+                ("QUANT_R", "1"),
+            ],
+        },
+        ShaderVariant {
+            name: "div_f32",
+            source: "div.comp",
+            defines: &[
+                ("A_TYPE", "float"),
+                ("B_TYPE", "float"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+                ("QUANT_K", "1"),
+                ("QUANT_R", "1"),
+            ],
+        },
         // Copy (strided)
-        ShaderVariant { name: "copy_f32", source: "copy.comp", defines: &[
-            ("A_TYPE", "float"), ("D_TYPE", "float"),
-        ]},
-
+        ShaderVariant {
+            name: "copy_f32",
+            source: "copy.comp",
+            defines: &[("A_TYPE", "float"), ("D_TYPE", "float")],
+        },
         // Dequantization shaders
-        ShaderVariant { name: "dequant_q4_0_f32", source: "dequant_q4_0.comp", defines: &[
-            ("D_TYPE", "float"),
-        ]},
-        ShaderVariant { name: "dequant_q8_0_f32", source: "dequant_q8_0.comp", defines: &[
-            ("D_TYPE", "float"),
-        ]},
-
+        ShaderVariant {
+            name: "dequant_q4_0_f32",
+            source: "dequant_q4_0.comp",
+            defines: &[("D_TYPE", "float")],
+        },
+        ShaderVariant {
+            name: "dequant_q8_0_f32",
+            source: "dequant_q8_0.comp",
+            defines: &[("D_TYPE", "float")],
+        },
         // Matrix-vector multiplication shaders (quantized)
-        // Q4K uses dedicated optimized shader from llama.cpp
-        ShaderVariant { name: "mul_mat_vec_q4_k_f32", source: "mul_mat_vec_q4_k.comp", defines: &[
-            ("DATA_A_Q4_K", "1"),
-            ("B_TYPE", "float"),
-            ("B_TYPE_VEC2", "vec2"),
-            ("B_TYPE_VEC4", "vec4"),
-            ("D_TYPE", "float"),
-            ("FLOAT_TYPE", "float"),
-        ]},
+        // Generic mul_mat_vec for simple quantization types (Q4_0, Q4_1, Q5_0, Q5_1, Q8_0)
+        // These use the generic mul_mat_vec.comp with dequantize/dequantize4 from dequant_funcs.glsl
+        ShaderVariant {
+            name: "mul_mat_vec_q4_0_f32",
+            source: "mul_mat_vec.comp",
+            defines: &[
+                ("DATA_A_Q4_0", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "mul_mat_vec_q4_1_f32",
+            source: "mul_mat_vec.comp",
+            defines: &[
+                ("DATA_A_Q4_1", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "mul_mat_vec_q5_0_f32",
+            source: "mul_mat_vec.comp",
+            defines: &[
+                ("DATA_A_Q5_0", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "mul_mat_vec_q5_1_f32",
+            source: "mul_mat_vec.comp",
+            defines: &[
+                ("DATA_A_Q5_1", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        ShaderVariant {
+            name: "mul_mat_vec_q8_0_f32",
+            source: "mul_mat_vec.comp",
+            defines: &[
+                ("DATA_A_Q8_0", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
+        // Q4K uses dedicated optimized shader from llama.cpp (more complex block structure)
+        ShaderVariant {
+            name: "mul_mat_vec_q4_k_f32",
+            source: "mul_mat_vec_q4_k.comp",
+            defines: &[
+                ("DATA_A_Q4_K", "1"),
+                ("B_TYPE", "float"),
+                ("B_TYPE_VEC2", "vec2"),
+                ("B_TYPE_VEC4", "vec4"),
+                ("D_TYPE", "float"),
+                ("FLOAT_TYPE", "float"),
+            ],
+        },
     ];
 
     for variant in &variants {
@@ -140,7 +318,10 @@ fn compile_ggml_shader(
     let mut options = CompileOptions::new().expect("Failed to create compile options");
 
     // Set target environment to Vulkan 1.2
-    options.set_target_env(shaderc::TargetEnv::Vulkan, shaderc::EnvVersion::Vulkan1_2 as u32);
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
 
     // Add preprocessor defines
     for (name, value) in variant.defines {
@@ -166,7 +347,10 @@ fn compile_ggml_shader(
             let output_path = out_dir.join(format!("{}.spv", variant.name));
             fs::write(&output_path, spirv.as_binary_u8())
                 .unwrap_or_else(|e| panic!("Failed to write {}: {}", output_path.display(), e));
-            println!("cargo:warning=Compiled {} -> {}.spv", variant.source, variant.name);
+            println!(
+                "cargo:warning=Compiled {} -> {}.spv",
+                variant.source, variant.name
+            );
         }
         Err(e) => {
             panic!("Failed to compile {}: {}", variant.name, e);

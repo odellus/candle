@@ -61,9 +61,33 @@ pub mod source {
     pub const DEQUANT_Q8_0_F32: &[u8] =
         include_bytes!(concat!(env!("OUT_DIR"), "/shaders/dequant_q8_0_f32.spv"));
 
-    // Quantized matrix-vector multiplication shaders
-    pub const MUL_MAT_VEC_Q4_K_F32: &[u8] =
-        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/mul_mat_vec_q4_k_f32.spv"));
+    // Quantized matrix-vector multiplication shaders (fused dequant + matvec)
+    // Simple quantization types use generic mul_mat_vec.comp
+    pub const MUL_MAT_VEC_Q4_0_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q4_0_f32.spv"
+    ));
+    pub const MUL_MAT_VEC_Q4_1_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q4_1_f32.spv"
+    ));
+    pub const MUL_MAT_VEC_Q5_0_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q5_0_f32.spv"
+    ));
+    pub const MUL_MAT_VEC_Q5_1_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q5_1_f32.spv"
+    ));
+    pub const MUL_MAT_VEC_Q8_0_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q8_0_f32.spv"
+    ));
+    // K-quants use dedicated optimized shaders
+    pub const MUL_MAT_VEC_Q4_K_F32: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/shaders/mul_mat_vec_q4_k_f32.spv"
+    ));
 }
 
 /// Number of descriptor sets per pool (matches ggml-vulkan's VK_DEVICE_DESCRIPTOR_POOL_SIZE)
@@ -192,8 +216,11 @@ impl Kernels {
             .collect();
 
         let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        let common_descriptor_set_layout =
-            unsafe { context.device.create_descriptor_set_layout(&layout_info, None)? };
+        let common_descriptor_set_layout = unsafe {
+            context
+                .device
+                .create_descriptor_set_layout(&layout_info, None)?
+        };
 
         // Create the pool manager
         let pool_manager =
@@ -250,11 +277,7 @@ impl Kernels {
         Ok(unsafe { &*(cache.get(name).unwrap() as *const CachedPipeline) })
     }
 
-    fn create_pipeline(
-        &self,
-        spirv: &[u8],
-        push_constant_size: u32,
-    ) -> Result<CachedPipeline> {
+    fn create_pipeline(&self, spirv: &[u8], push_constant_size: u32) -> Result<CachedPipeline> {
         let device = &self.context.device;
 
         // Create shader module

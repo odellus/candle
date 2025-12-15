@@ -1,17 +1,22 @@
 #version 450
 
+// Generic matrix-vector multiplication shader for quantized types
+// Based on llama.cpp/ggml-vulkan mul_mat_vec.comp
+// Supports Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 via preprocessor defines
+
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 
 #include "mul_mat_vec_base.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
+// For quantized types, process 8 elements per iteration (one block at a time)
+// For float types, process 2 elements per iteration
 #if !defined(DATA_A_F32) && !defined(DATA_A_F16) && !defined(DATA_A_BF16)
 #define K_PER_ITER 8
 #else
 #define K_PER_ITER 2
 #endif
-
 
 uint a_offset, b_offset, d_offset, y_offset;
 
@@ -33,11 +38,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         const vec4 bv1 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + iybs + iqs) / 4 + 1]);
 #endif
 #else
-        // Check if the second of the pair of elements is OOB, and don't fetch B or
-        // accumulate it. We still fetch a pair of elements for A, which is fine for
-        // quantized formats since they'll be within the same block. We should
-        // probably skip fetching the second element for F16/F32, but as of now we
-        // still do.
+        // Check if the second of the pair of elements is OOB
         const bool OOB = lastiter && (iybs + iqs + y_offset >= p.ncols);
 
         FLOAT_TYPE b0 = 0, b1 = 0;
@@ -107,7 +108,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
 #if K_PER_ITER == 2
     // If the K dimension is odd, we need lastiter==true on the last iteration
-    // so OOB is computed correctly. Skip some unrolling to make that happen.
     if ((p.ncols & 1) != 0 &&
         unrolled_iters == num_iters &&
         unrolled_iters > 0) {
@@ -117,7 +117,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     uint i = 0;
     while (i < unrolled_iters) {
-        // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
             iter(temp, first_row, num_rows, tid, i*K_PER_ITER, false);
             i++;
@@ -136,7 +135,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 #endif
 
     while (i < unrolled_iters) {
-        // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
             iter(temp, first_row, num_rows, tid, i*K_PER_ITER, false);
             i++;
@@ -152,10 +150,6 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
 void main() {
     const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
-
-#ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
-#endif
 
     // do NUM_ROWS at a time, unless there aren't enough remaining rows
     if (first_row + NUM_ROWS <= p.stride_d) {
