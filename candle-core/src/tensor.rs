@@ -676,6 +676,7 @@ impl Tensor {
             Storage::Cpu(cpu_storage) => from_cpu_storage(cpu_storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Hip(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1835,6 +1836,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Hip(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1866,6 +1868,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Hip(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -1907,6 +1910,7 @@ impl Tensor {
             Storage::Cpu(storage) => from_cpu_storage(storage),
             Storage::Cuda(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
             Storage::Metal(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
+            Storage::Hip(storage) => from_cpu_storage(&storage.to_cpu_storage()?),
         }
     }
 
@@ -2272,6 +2276,16 @@ impl Tensor {
                     Storage::Cuda(cuda.storage_from_cpu_storage(&cpu_storage)?)
                 }
                 (Storage::Cpu(storage), Device::Cpu) => Storage::Cpu(storage.clone()),
+                (Storage::Cpu(storage), Device::Hip(hip)) => {
+                    Storage::Hip(hip.storage_from_cpu_storage(storage)?)
+                }
+                (Storage::Hip(storage), Device::Cpu) => Storage::Cpu(storage.to_cpu_storage()?),
+                (Storage::Hip(storage), Device::Hip(hip)) => {
+                    // TODO: Avoid passing through the cpu storage here, especially if the gpu ids
+                    // are the same.
+                    let cpu_storage = storage.to_cpu_storage()?;
+                    Storage::Hip(hip.storage_from_cpu_storage(&cpu_storage)?)
+                }
                 _ => {
                     bail!(
                         "not implemented yet, self.device: {:?}, device: {:?}",

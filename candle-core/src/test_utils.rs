@@ -22,6 +22,31 @@ macro_rules! test_device {
             $fn_name(&Device::new_metal(0)?)
         }
     };
+
+    ($fn_name: ident, $test_cpu: ident, $test_cuda: ident, $test_metal: ident, $test_hip: ident) => {
+        #[test]
+        fn $test_cpu() -> Result<()> {
+            $fn_name(&Device::Cpu)
+        }
+
+        #[cfg(feature = "cuda")]
+        #[test]
+        fn $test_cuda() -> Result<()> {
+            $fn_name(&Device::new_cuda(0)?)
+        }
+
+        #[cfg(feature = "metal")]
+        #[test]
+        fn $test_metal() -> Result<()> {
+            $fn_name(&Device::new_metal(0)?)
+        }
+
+        #[cfg(feature = "hip")]
+        #[test]
+        fn $test_hip() -> Result<()> {
+            $fn_name(&Device::new_hip(0)?)
+        }
+    };
 }
 
 pub fn assert_tensor_eq(t1: &Tensor, t2: &Tensor) -> Result<()> {

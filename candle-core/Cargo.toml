@@ -13,6 +13,7 @@ readme = "README.md"
 accelerate-src = { workspace = true, optional = true }
 byteorder = { workspace = true }
 candle-kernels = { workspace = true, optional = true }
+candle-hip-kernels = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
@@ -57,6 +58,7 @@ metal = [
     "dep:candle-metal-kernels",
     "dep:ug-metal",
 ]
+hip = ["dep:candle-hip-kernels"]
 
 [[bench]]
 name = "bench_main"
@@ -69,3 +71,7 @@ required-features = ["metal"]
 [[example]]
 name = "cuda_basics"
 required-features = ["cuda"]
+
+[[example]]
+name = "hip_basics"
+required-features = ["hip"]
