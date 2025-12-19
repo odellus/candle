@@ -173,6 +173,38 @@ impl HipStorage {
         &self.device
     }
 
+    /// Get the raw device pointer for this storage
+    pub fn as_hip_ptr(&self) -> Result<*const c_void> {
+        let ptr = match &self.slice {
+            HipStorageSlice::U8(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::U32(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::I16(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::I32(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::I64(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::BF16(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::F16(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::F32(s) => s.as_ptr() as *const c_void,
+            HipStorageSlice::F64(s) => s.as_ptr() as *const c_void,
+        };
+        Ok(ptr)
+    }
+
+    /// Get the raw mutable device pointer for this storage
+    pub fn as_hip_ptr_mut(&mut self) -> Result<*mut c_void> {
+        let ptr = match &mut self.slice {
+            HipStorageSlice::U8(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::U32(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::I16(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::I32(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::I64(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::BF16(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::F16(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::F32(s) => s.as_mut_ptr() as *mut c_void,
+            HipStorageSlice::F64(s) => s.as_mut_ptr() as *mut c_void,
+        };
+        Ok(ptr)
+    }
+
     /// Launch a kernel with the given parameters
     fn launch_kernel(
         &self,
